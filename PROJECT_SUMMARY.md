@@ -76,7 +76,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "itop": {
       "command": "uv",
-      "args": ["--directory", "/home/roney/mcp/itop-mcp", "run", "main.py"],
+      "args": ["run", "itop-mcp"],
       "env": {
         "ITOP_BASE_URL": "https://your-itop-instance.com",
         "ITOP_USER": "your_username", 

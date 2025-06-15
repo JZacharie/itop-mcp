@@ -101,10 +101,8 @@ To use this server with Claude Desktop, add the following to your `claude_deskto
     "itop": {
       "command": "uv",
       "args": [
-        "--directory",
-        "/absolute/path/to/itop-mcp",
         "run",
-        "main.py"
+        "itop-mcp"
       ],
       "env": {
         "ITOP_BASE_URL": "https://your-itop-instance.com",
@@ -114,6 +112,9 @@ To use this server with Claude Desktop, add the following to your `claude_deskto
     }
   }
 }
+```
+
+> **Note**: This works because we've configured `itop-mcp` as an entry point in `pyproject.toml`. You need to run this from the project directory where `pyproject.toml` is located, or uv needs to be able to find the project.
 ```
 
 ### Example Operations

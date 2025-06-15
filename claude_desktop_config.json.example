@@ -3,10 +3,8 @@
     "itop": {
       "command": "uv",
       "args": [
-        "--directory",
-        "/home/roney/mcp/itop-mcp",
         "run",
-        "main.py"
+        "itop-mcp"
       ],
       "env": {
         "ITOP_BASE_URL": "https://your-itop-instance.com",
