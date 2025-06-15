@@ -49,7 +49,7 @@ Issues = "https://github.com/roneydsilva/itop-mcp-server/issues"
 Changelog = "https://github.com/roneydsilva/itop-mcp-server/releases"
 
 [project.scripts]
-itop-mcp = "main:main"
+itop-mcp-server = "main:main"
 
 [project.optional-dependencies]
 dev = [

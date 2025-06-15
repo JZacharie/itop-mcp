@@ -17,6 +17,18 @@ The iTop MCP server provides the following tools:
 
 ## Installation
 
+### Option 1: Install from PyPI (Recommended)
+
+```bash
+# Install the package
+pip install itop-mcp-server
+
+# Or using uv
+uv add itop-mcp-server
+```
+
+### Option 2: Install from Source
+
 1. **Prerequisites**:
    - Python 3.10 or higher
    - Access to an iTop instance with REST API enabled
@@ -27,7 +39,9 @@ The iTop MCP server provides the following tools:
    # Install uv if you haven't already
    curl -LsSf https://astral.sh/uv/install.sh | sh
    
-   # Install project dependencies
+   # Clone and install
+   git clone https://github.com/roneydsilva/itop-mcp-server.git
+   cd itop-mcp-server
    uv sync
    ```
 
@@ -60,7 +74,26 @@ uv run main.py
 
 ### Connecting to Claude Desktop
 
+#### Option 1: Using PyPI Installation
+
 To use this server with Claude Desktop, add the following to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "itop": {
+      "command": "itop-mcp-server",
+      "env": {
+        "ITOP_BASE_URL": "https://your-itop-instance.com",
+        "ITOP_USER": "your_username",
+        "ITOP_PASSWORD": "your_password"
+      }
+    }
+  }
+}
+```
+
+#### Option 2: Using Source Installation
 
 ```json
 {

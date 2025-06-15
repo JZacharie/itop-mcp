@@ -1,6 +1,6 @@
 # Makefile for iTop MCP Server
 
-.PHONY: help install test validate run clean setup-dev config status
+.PHONY: help install test validate run clean setup-dev config status build publish publish-test
 
 # Default target
 help:
@@ -16,6 +16,11 @@ help:
 	@echo ""
 	@echo "Configuration:"
 	@echo "  config       - Copy example config and show setup instructions"
+	@echo ""
+	@echo "Publishing:"
+	@echo "  build        - Build package for distribution"
+	@echo "  publish-test - Publish to TestPyPI"
+	@echo "  publish      - Publish to PyPI"
 	@echo ""
 
 # Initial setup
@@ -73,7 +78,36 @@ clean:
 	@echo "🧹 Cleaning up..."
 	find . -type f -name "*.pyc" -delete
 	find . -type d -name "__pycache__" -delete
+	rm -rf dist/
+	rm -rf build/
+	rm -rf *.egg-info/
 	@echo "✅ Cleanup complete"
+
+# Build package
+build: clean
+	@echo "📦 Building package..."
+	uv build
+	@echo "✅ Build complete"
+	@echo "📄 Distribution files:"
+	@ls -la dist/
+
+# Publish to TestPyPI (for testing)
+publish-test: build
+	@echo "🚀 Publishing to TestPyPI..."
+	@echo "⚠️  Make sure you have configured your TestPyPI credentials"
+	uv publish --repository testpypi dist/*
+	@echo "✅ Published to TestPyPI"
+	@echo "🔗 Check: https://test.pypi.org/project/itop-mcp-server/"
+
+# Publish to PyPI (production)
+publish: build
+	@echo "🚀 Publishing to PyPI..."
+	@echo "⚠️  Make sure you have configured your PyPI credentials"
+	@echo "⚠️  This will publish to the LIVE PyPI repository!"
+	@read -p "Are you sure? (y/N): " confirm && [ "$$confirm" = "y" ]
+	uv publish dist/*
+	@echo "✅ Published to PyPI"
+	@echo "🔗 Check: https://pypi.org/project/itop-mcp-server/"
 
 # Show current status
 status:
