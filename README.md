@@ -99,16 +99,19 @@ To use this server with Claude Desktop, add the following to your `claude_deskto
 {
   "mcpServers": {
     "itop": {
-      "command": "uv",
-      "args": [
-        "run",
-        "itop-mcp"
-      ],
-      "env": {
-        "ITOP_BASE_URL": "https://your-itop-instance.com",
-        "ITOP_USER": "your_username",
-        "ITOP_PASSWORD": "your_password"
-      }
+        "command": "uv",
+        "args": [
+            "run",
+            "--directory",
+            "/path/to/itop-mcp",
+            "itop-mcp"
+        ],
+        "env": {
+            "ITOP_BASE_URL": "https://your-itop-instance.com",
+            "ITOP_USER": "your_username",
+            "ITOP_PASSWORD": "your_password",
+            "ITOP_VERSION": "1.3"
+        }
     }
   }
 }
