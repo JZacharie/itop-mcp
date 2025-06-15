@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "itop": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/home/roney/mcp/itop-mcp",
+        "run",
+        "main.py"
+      ],
+      "env": {
+        "ITOP_BASE_URL": "https://your-itop-instance.com",
+        "ITOP_USER": "your_username",
+        "ITOP_PASSWORD": "your_password",
+        "ITOP_VERSION": "1.4"
+      }
+    }
+  }
+}
