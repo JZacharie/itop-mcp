@@ -21,10 +21,10 @@ The iTop MCP server provides the following tools:
 
 ```bash
 # Install the package
-pip install itop-mcp-server
+pip install itop-mcp
 
 # Or using uv
-uv add itop-mcp-server
+uv add itop-mcp
 ```
 
 ### Option 2: Install from Source
@@ -40,8 +40,8 @@ uv add itop-mcp-server
    curl -LsSf https://astral.sh/uv/install.sh | sh
    
    # Clone and install
-   git clone https://github.com/roneydsilva/itop-mcp-server.git
-   cd itop-mcp-server
+   git clone https://github.com/roneydsilva/itop-mcp.git
+   cd itop-mcp
    uv sync
    ```
 
@@ -82,7 +82,7 @@ To use this server with Claude Desktop, add the following to your `claude_deskto
 {
   "mcpServers": {
     "itop": {
-      "command": "itop-mcp-server",
+      "command": "itop-mcp",
       "env": {
         "ITOP_BASE_URL": "https://your-itop-instance.com",
         "ITOP_USER": "your_username",

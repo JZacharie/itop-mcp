@@ -1,5 +1,5 @@
 [project]
-name = "itop-mcp-server"
+name = "itop-mcp"
 version = "1.0.0"
 description = "Model Context Protocol server for iTop ITSM integration"
 readme = "README.md"
@@ -42,14 +42,14 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/roneydsilva/itop-mcp-server"
-Documentation = "https://github.com/roneydsilva/itop-mcp-server#readme"
-Repository = "https://github.com/roneydsilva/itop-mcp-server.git"
-Issues = "https://github.com/roneydsilva/itop-mcp-server/issues"
-Changelog = "https://github.com/roneydsilva/itop-mcp-server/releases"
+Homepage = "https://github.com/roneydsilva/itop-mcp"
+Documentation = "https://github.com/roneydsilva/itop-mcp#readme"
+Repository = "https://github.com/roneydsilva/itop-mcp.git"
+Issues = "https://github.com/roneydsilva/itop-mcp/issues"
+Changelog = "https://github.com/roneydsilva/itop-mcp/releases"
 
 [project.scripts]
-itop-mcp-server = "main:main"
+itop-mcp = "main:main"
 
 [project.optional-dependencies]
 dev = [
