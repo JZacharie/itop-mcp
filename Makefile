@@ -95,19 +95,21 @@ build: clean
 publish-test: build
 	@echo "🚀 Publishing to TestPyPI..."
 	@echo "⚠️  Make sure you have configured your TestPyPI credentials"
-	uv publish --repository testpypi dist/*
+	@echo "💡 Set your token: export UV_PUBLISH_TOKEN=your-testpypi-token"
+	UV_PUBLISH_URL=https://test.pypi.org/legacy/ uv publish dist/*
 	@echo "✅ Published to TestPyPI"
-	@echo "🔗 Check: https://test.pypi.org/project/itop-mcp-server/"
+	@echo "🔗 Check: https://test.pypi.org/project/itop-mcp/"
 
 # Publish to PyPI (production)
 publish: build
 	@echo "🚀 Publishing to PyPI..."
 	@echo "⚠️  Make sure you have configured your PyPI credentials"
 	@echo "⚠️  This will publish to the LIVE PyPI repository!"
+	@echo "💡 Set your token: export UV_PUBLISH_TOKEN=your-pypi-token"
 	@read -p "Are you sure? (y/N): " confirm && [ "$$confirm" = "y" ]
 	uv publish dist/*
 	@echo "✅ Published to PyPI"
-	@echo "🔗 Check: https://pypi.org/project/itop-mcp-server/"
+	@echo "🔗 Check: https://pypi.org/project/itop-mcp/"
 
 # Show current status
 status:

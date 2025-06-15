@@ -31,16 +31,28 @@ username = __token__
 password = <your-testpypi-api-token>
 ```
 
-### 2. Or use uv's built-in configuration
+### 2. Configure API Tokens
 
+#### Environment Variables (Recommended):
 ```bash
-# Configure PyPI token
-uv publish --username __token__ --password <your-pypi-token>
+# For TestPyPI
+export UV_PUBLISH_TOKEN="pypi-your-testpypi-token-here"
 
-# Or use environment variables
-export UV_PUBLISH_USERNAME="__token__"
-export UV_PUBLISH_PASSWORD="<your-pypi-token>"
+# For PyPI (production)  
+export UV_PUBLISH_TOKEN="pypi-your-pypi-token-here"
 ```
+
+#### Or use uv configuration file (`~/.config/uv/uv.toml`):
+```toml
+[publish.testpypi]
+url = "https://test.pypi.org/legacy/"
+password = "pypi-your-testpypi-token-here"
+
+[publish.pypi]
+password = "pypi-your-pypi-token-here"
+```
+
+📋 **See PYPI_TOKEN_SETUP.md for detailed token setup instructions**
 
 ## Publishing Process
 
