@@ -6,6 +6,7 @@ A Model Context Protocol (MCP) server for integrating with iTop ITSM (IT Service
 
 The iTop MCP server provides the following tools:
 
+**Core iTop Operations:**
 - **list_operations**: List all available iTop REST API operations
 - **get_objects**: Search and retrieve iTop objects (tickets, users, CIs, etc.)
 - **create_object**: Create new objects in iTop
@@ -14,6 +15,16 @@ The iTop MCP server provides the following tools:
 - **apply_stimulus**: Apply state transitions to objects (e.g., resolve tickets)
 - **get_related_objects**: Find related objects through impact/dependency relationships
 - **check_credentials**: Verify iTop API credentials
+
+**Enhanced Ticket Management:**
+- **get_latest_tickets**: Get recent tickets ordered by creation date with status filtering
+- **search_tickets_by_caller**: Find tickets by caller name
+- **get_ticket_details**: Get comprehensive details for a specific ticket
+- **get_my_assigned_tickets**: Get tickets assigned to a specific agent with status grouping
+- **create_user_request**: Streamlined user request creation with smart field resolution
+
+**Organization Management:**
+- **get_organizations**: List and search organizations with filtering
 
 ## Installation
 
@@ -124,11 +135,22 @@ To use this server with Claude Desktop, add the following to your `claude_deskto
 
 Once connected, you can ask your AI assistant to perform operations like:
 
+**Basic Operations:**
 - "List all open user requests in iTop"
 - "Create a new incident ticket for server downtime"
 - "Find all CIs related to the mail server"
 - "Update the priority of ticket #123 to high"
 - "Resolve ticket #456 with resolution details"
+
+**Enhanced Queries:**
+- "Get the latest 5 tickets created today"
+- "Show me all tickets assigned to John Smith"
+- "Find all tickets reported by Jane Doe"
+- "Get detailed information for ticket R-000123"
+- "List organizations containing 'Tech' in their name"
+
+**Smart Ticket Creation:**
+- "Create a new user request for printer issues reported by John from IT Department"
 
 ## iTop Class Examples
 

@@ -1,15 +1,15 @@
 [project]
 name = "itop-mcp"
-version = "1.0.0"
+version = "1.0.1"
 description = "Model Context Protocol server for iTop ITSM integration"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
-    { name = "Roney Dsilva", email = "roney@example.com" }
+    { name = "Roney Dsilva", email = "roney@cdmx.in" }
 ]
 maintainers = [
-    { name = "Roney Dsilva", email = "roney@example.com" }
+    { name = "Roney Dsilva", email = "roney@cdmx.in" }
 ]
 keywords = [
     "mcp",
@@ -57,7 +57,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "isort>=5.12.0",
-    "mypy>=1.0.0",
+    "mypy>=1.0.1",
 ]
 
 [build-system]
