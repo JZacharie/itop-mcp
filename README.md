@@ -2,9 +2,16 @@
 
 A Model Context Protocol (MCP) server for integrating with iTop ITSM (IT Service Management) systems. This server provides AI assistants with the ability to interact with iTop through its REST API, enabling operations like ticket management, CI (Configuration Item) management, and more.
 
-## Features
+## 🚀 Features
 
 The iTop MCP server provides the following tools:
+
+**Enhanced Support Ticket Management:**
+- **get_support_tickets**: Get support tickets with SLA tracking and optimized field selection
+- **get_ticket_details**: Get comprehensive details for a specific ticket
+- **create_user_request**: Streamlined user request creation with smart field resolution
+- **search_tickets_by_caller**: Find tickets by caller name
+- **get_my_assigned_tickets**: Get tickets assigned to a specific agent with status grouping
 
 **Core iTop Operations:**
 - **list_operations**: List all available iTop REST API operations
@@ -16,38 +23,206 @@ The iTop MCP server provides the following tools:
 - **get_related_objects**: Find related objects through impact/dependency relationships
 - **check_credentials**: Verify iTop API credentials
 
-**Enhanced Ticket Management:**
-- **get_latest_tickets**: Get recent tickets ordered by creation date with status filtering
-- **search_tickets_by_caller**: Find tickets by caller name
-- **get_ticket_details**: Get comprehensive details for a specific ticket
-- **get_my_assigned_tickets**: Get tickets assigned to a specific agent with status grouping
-- **create_user_request**: Streamlined user request creation with smart field resolution
-
 **Organization Management:**
 - **get_organizations**: List and search organizations with filtering
 
-## Installation
+## 📦 Installation
 
-### Option 1: Install from PyPI (Recommended)
+### Python Implementation
 
 ```bash
-# Install the package
+# Install from PyPI
 pip install itop-mcp
 
 # Or using uv
 uv add itop-mcp
 ```
 
-### Option 2: Install from Source
+### Node.js Implementation
 
-1. **Prerequisites**:
-   - Python 3.10 or higher
-   - Access to an iTop instance with REST API enabled
-   - iTop user account with "REST Services User" profile
+```bash
+# Install from npm (coming soon)
+npm install itop-mcp-nodejs
 
-2. **Install dependencies**:
+# Or clone and build locally
+git clone https://github.com/roneydsilva/itop-mcp.git
+cd itop-mcp/nodejs
+npm install
+npm run build
+```
+
+## 🔧 MCP Configuration
+
+### Prerequisites
+
+1. **iTop Instance**: Access to an iTop instance with REST API enabled
+2. **iTop User Account**: User account with "REST Services User" profile
+3. **Environment Variables**: Set the following environment variables:
    ```bash
-   # Install uv if you haven't already
+   export ITOP_BASE_URL="https://your-itop-instance.com"
+   export ITOP_USER="your-username"
+   export ITOP_PASSWORD="your-password"
+   export ITOP_VERSION="1.4"  # Optional, defaults to 1.4
+   ```
+
+### Claude Desktop Configuration
+
+Add to your Claude Desktop configuration file:
+
+**For Python implementation:**
+
+```json
+{
+  "mcpServers": {
+    "itop": {
+      "command": "python",
+      "args": ["-m", "main"],
+      "cwd": "/path/to/itop-mcp",
+      "env": {
+        "ITOP_BASE_URL": "https://your-itop-instance.com",
+        "ITOP_USER": "your-username", 
+        "ITOP_PASSWORD": "your-password",
+        "ITOP_VERSION": "1.4"
+      }
+    }
+  }
+}
+```
+
+**For installed package:**
+
+```json
+{
+  "mcpServers": {
+    "itop": {
+      "command": "itop-mcp",
+      "env": {
+        "ITOP_BASE_URL": "https://your-itop-instance.com",
+        "ITOP_USER": "your-username",
+        "ITOP_PASSWORD": "your-password", 
+        "ITOP_VERSION": "1.4"
+      }
+    }
+  }
+}
+```
+
+**For Node.js implementation:**
+
+```json
+{
+  "mcpServers": {
+    "itop": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/path/to/itop-mcp/nodejs",
+      "env": {
+        "ITOP_BASE_URL": "https://your-itop-instance.com",
+        "ITOP_USER": "your-username",
+        "ITOP_PASSWORD": "your-password",
+        "ITOP_VERSION": "1.4"
+      }
+    }
+  }
+}
+```
+
+### Other MCP Clients
+
+For other MCP clients, use similar configuration with the appropriate command and environment variables.
+
+## 🎯 Support Ticket Management
+
+The enhanced support ticket functionality provides optimized field selection for common ITSM operations:
+
+### Default Fields for UserRequest:
+- `ref`: Ticket reference number
+- `title`: Ticket title/summary
+- `status`: Current status
+- `start_date`: Ticket start date
+- `close_date`: Ticket close date  
+- `sla_tto_passed`: SLA Time to Own compliance (✓/✗)
+- `sla_ttr_passed`: SLA Time to Resolve compliance (✓/✗)
+
+### SLA Tracking
+The server automatically tracks SLA compliance and provides visual indicators:
+- ✅ **On Time**: SLA target met
+- ❌ **Breached**: SLA target exceeded  
+- ➖ **N/A**: SLA not applicable
+
+### Output Formats
+1. **detailed**: Full ticket information with SLA status
+2. **summary**: Condensed view with status breakdown and SLA breach count
+3. **table**: Tabular format for easy scanning
+
+## 🧪 Development & Testing
+
+### Running Tests
+
+```bash
+# Run all tests
+python tests/run_tests.py
+
+# Run specific test types
+python tests/run_tests.py --unit        # Unit tests only
+python tests/run_tests.py --live        # Live tests only (requires iTop instance)
+python tests/run_tests.py --nodejs      # Node.js tests only
+python tests/run_tests.py --lint        # Linting only
+
+# Auto-fix linting issues
+python tests/run_tests.py --fix
+```
+
+### Code Quality
+
+The project includes comprehensive linting and formatting:
+
+- **Black**: Code formatting
+- **isort**: Import sorting  
+- **Flake8**: Code linting
+- **mypy**: Type checking (Python)
+- **ESLint**: TypeScript linting (Node.js)
+
+### Live Testing
+
+Set environment variables and run live tests against your iTop instance:
+
+```bash
+export ITOP_BASE_URL="https://your-itop-instance.com"
+export ITOP_USER="your-username"
+export ITOP_PASSWORD="your-password"
+
+python tests/test_live.py
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `python tests/run_tests.py`
+5. Submit a pull request
+
+## 📋 Example Usage
+
+Once configured, you can ask Claude:
+
+- "Show me all new support tickets with SLA status"
+- "Get user requests that have breached SLA"
+- "List incidents by priority with table format"
+- "Find tickets assigned to John Smith"
+- "Create a new user request for printer issues"
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🔗 Links
+
+- **Repository**: https://github.com/roneydsilva/itop-mcp
+- **PyPI Package**: https://pypi.org/project/itop-mcp/
+- **Issues**: https://github.com/roneydsilva/itop-mcp/issues
+- **iTop Documentation**: https://www.itophub.io/wiki/page?id=latest%3Aadvancedtopics%3Arest_json
    curl -LsSf https://astral.sh/uv/install.sh | sh
    
    # Clone and install

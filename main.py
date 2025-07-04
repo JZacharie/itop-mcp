@@ -1053,7 +1053,7 @@ def analyze_query_intent_with_schema(query: str, class_name: str, class_fields: 
             group_words = group_part.split()
             if group_words:
                 # Try to find actual field that matches grouping intent
-                potential_group_field = find_semantically_similar_field(group_words[0], available_fields)
+                potential_group_field = find_semantically_similar_field(group_words[0], class_fields.get("field_names", []))
                 analysis["grouping"] = potential_group_field or group_words[0]
     
     # Detect time-based analysis with schema awareness
@@ -2040,22 +2040,3 @@ def _extract_count_from_message(message: str) -> int:
         return 0
     except (ValueError, AttributeError):
         return 0
-
-
-def main():
-    """Main entry point for the MCP server"""
-    # Check environment variables
-    if not all([ITOP_BASE_URL, ITOP_USER, ITOP_PASSWORD]):
-        print("Error: Missing required environment variables:")
-        print("  - ITOP_BASE_URL: URL to your iTop instance")
-        print("  - ITOP_USER: iTop username")  
-        print("  - ITOP_PASSWORD: iTop password")
-        print("  - ITOP_VERSION: API version (optional, default: 1.4)")
-        exit(1)
-    
-    # Run the server
-    mcp.run(transport="stdio")
-
-if __name__ == "__main__":
-    main()
-
