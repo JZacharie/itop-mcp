@@ -5,6 +5,22 @@ All notable changes to the iTop MCP Server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-07-10
+
+### Added
+- Smart Query Processor: Accepts natural language ITSM queries and maps them to iTop classes and fields automatically.
+- Dynamic Schema Discovery: Automatically detects available iTop classes and their fields for flexible, schema-aware queries.
+- Advanced Query Features: Supports grouping, filtering, SLA-based stats, and relationship navigation in natural language queries.
+- Enhanced User-Facing Features: Added support for queries such as PC/Server/VM counts, status breakdowns, SLA compliance, and more.
+- Extensibility: Framework for adding new query types and custom logic with minimal code changes.
+- Improved Documentation: Comprehensive rewrite of README.md, including advanced usage, extensibility, and feature documentation.
+
+### Changed
+- README.md updated for clarity, completeness, and alignment with new features and usage patterns.
+
+### Fixed
+- Minor documentation and usage guide corrections.
+
 ## [1.0.0] - 2025-06-15
 
 ### Added
