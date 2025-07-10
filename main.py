@@ -188,8 +188,21 @@ def _format_field_value(value: Any, max_length: int = 500) -> str:
     return str_value
 
 
+def _format_field_value(value: Any, max_length: int = 500) -> str:
+    """Helper function to format field values for display with NO truncation."""
+    if value is None:
+        return "None"
+    str_value = str(value)
+    # Handle HTML content
+    if "<" in str_value and ">" in str_value:
+        str_value = re.sub(r'<[^>]+>', '', str_value).strip()
+    # Do NOT truncate values
+    str_value = str_value.replace("\n", " ").replace("\r", "")
+    return str_value
+
+
 def _format_objects_output(objects: dict, class_name: str, format_type: str, search_key: Optional[str] = None) -> str:
-    """Helper function to format object output in different styles."""
+    """Helper function to format object output in different styles (no field count/length limits)."""
     
     if format_type == "json":
         # Return clean JSON format
@@ -209,6 +222,9 @@ def _format_objects_output(objects: dict, class_name: str, format_type: str, sea
         for obj_key, obj_data in objects.items():
             if obj_data.get("code") == 0:
                 fields = obj_data.get("fields", {})
+                # Show all non-empty fields
+                field_values = [f"{field_name}: {_format_field_value(field_value)}" for field_name, field_value in fields.items() if field_value]
+                output += f"🔹 **{obj_key}** - {', '.join(field_values)}\n"
                 # Show all non-empty fields
                 field_values = [f"{field_name}: {_format_field_value(field_value)}" for field_name, field_value in fields.items() if field_value]
                 output += f"🔹 **{obj_key}** - {', '.join(field_values)}\n"
@@ -237,7 +253,7 @@ def _format_objects_output(objects: dict, class_name: str, format_type: str, sea
         
         # Header row
         header_row = f"{'Object Key':<{col_widths['key']}} | "
-        header_row += " | ".join(f"{field:<{col_widths[field]}}" for field in display_fields)
+        header_row += " | ".join(f"{field:<{col_widths[field]}}" for field in all_fields)
         output += header_row + "\n"
         output += "-" * len(header_row) + "\n"
         
@@ -2170,11 +2186,17 @@ async def smart_query_processor(
             "key": oql_query,
             "output_fields": output_fields,
             "limit": limit
+            "operation": "core/get",
+            "class": class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
         }
         
         result = await client.make_request(operation_data)
         
         if result.get("code") != 0:
+            return f"❌ **Query Error**: {result.get('message', 'Unknown error')}"
             return f"❌ **Query Error**: {result.get('message', 'Unknown error')}"
         
         objects = result.get("objects", {})
@@ -2368,15 +2390,25 @@ async def smart_query_processor(
 
 @mcp.tool()
 async def discover_available_classes(search_term: Optional[str] = None) -> str:
+async def discover_available_classes(search_term: Optional[str] = None) -> str:
     """
+    Discover available iTop classes with their descriptions and use cases.
     Discover available iTop classes with their descriptions and use cases.
     
     Args:
         search_term: Optional term to filter classes by (e.g., "ticket", "server", "user")
        """
+        search_term: Optional term to filter classes by (e.g., "ticket", "server", "user")
+       """
     try:
         result = "📚 **iTop Class Discovery**\n\n"
+        result = "📚 **iTop Class Discovery**\n\n"
         
+        if search_term:
+            result += f"🔍 **Searching for**: \"{search_term}\"\n\n"
+            search_lower = search_term.lower()
+        else:
+            result += "📋 **All Available Classes by Category**\n\n"
         if search_term:
             result += f"🔍 **Searching for**: \"{search_term}\"\n\n"
             search_lower = search_term.lower()
