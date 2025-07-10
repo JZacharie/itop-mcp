@@ -2186,11 +2186,6 @@ async def smart_query_processor(
             "key": oql_query,
             "output_fields": output_fields,
             "limit": limit
-            "operation": "core/get",
-            "class": class_name,
-            "key": oql_query,
-            "output_fields": output_fields,
-            "limit": limit
         }
         
         result = await client.make_request(operation_data)
@@ -2390,16 +2385,12 @@ async def smart_query_processor(
 
 @mcp.tool()
 async def discover_available_classes(search_term: Optional[str] = None) -> str:
-async def discover_available_classes(search_term: Optional[str] = None) -> str:
     """
-    Discover available iTop classes with their descriptions and use cases.
     Discover available iTop classes with their descriptions and use cases.
     
     Args:
         search_term: Optional term to filter classes by (e.g., "ticket", "server", "user")
-       """
-        search_term: Optional term to filter classes by (e.g., "ticket", "server", "user")
-       """
+    """
     try:
         result = "📚 **iTop Class Discovery**\n\n"
         result = "📚 **iTop Class Discovery**\n\n"
