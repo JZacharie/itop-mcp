@@ -874,35 +874,43 @@ class SmartHandlerBase:
             "sla_analysis": False
         }
         
-        # Detect action type - Enhanced comparison detection first
+        # Detect action type - Enhanced comparison detection first with high priority
         is_comparison = any(word in query_lower for word in ["vs", "versus", "v/s", "compared to"])
         is_count_request = any(word in query_lower for word in ["count", "how many", "total"]) and not is_comparison
+        is_grouping = any(word in query_lower for word in ["group by", "grouped by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org", "by status", "by priority", "by team", "by agent", "by type"]) and not is_comparison
         
+        # PRIORITY ORDER: comparison > count > grouping > list
+        # This ensures that queries like "grouped by X: A vs B" are treated as comparisons
         if is_comparison:
             intent["action"] = "compare"
             intent["comparison"] = True
         elif is_count_request:
             intent["action"] = "count"
-        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org", "by status", "by priority", "by team", "by agent", "by type"]):
+        elif is_grouping:
             intent["action"] = "group"
         
         # Enhanced SLA comparison detection - ONLY for explicit SLA mentions
         # Only apply SLA comparison when both "sla" AND comparison terms are present
         sla_comparison_patterns = [
-            "sla. *closed on time vs not closed on time",  # Explicit SLA timing language
-            "sla.*closed vs not closed",             # SLA mentioned with closed comparison
-            "closed vs not closed.*sla",             # Closed comparison with SLA mentioned  
-            "sla.*on time vs not on time",           # SLA with timing comparison
-            "on time vs not on time.*sla",           # Timing comparison with SLA
-            "met sla vs missed sla",                 # Direct SLA comparison
-            "sla met vs sla missed"                  # Direct SLA comparison
+            r"sla.*closed on time.*not closed on time",  # SLA with explicit timing language
+            r"sla.*closed vs not closed",                # SLA mentioned with closed comparison
+            r"closed vs not closed.*sla",                # Closed comparison with SLA mentioned
+            r"sla.*on time vs not on time",              # SLA with timing comparison
+            r"on time vs not on time.*sla",              # Timing comparison with SLA
+            r"met sla vs missed sla",                    # Direct SLA comparison
+            r"sla met vs sla missed",                    # Direct SLA comparison
+            r"support tickets closed on time vs not closed on time based on sla",
+            r"closed vs not closed on time.*sla", 
+            r"closed vs not closed.*on time.*sla",
+            r".*closed on time.*not closed on time.*based on sla.*",  # More flexible pattern
+            r".*sla.*closed on time.*not closed on time.*"   # More flexible pattern
         ]
         
         # Check if this is an SLA-related comparison (must have explicit SLA mention)
         is_sla_comparison = False
         if "sla" in query_lower:  # Only check patterns if SLA is mentioned
             for pattern in sla_comparison_patterns:
-                if re.search(pattern, query_lower):
+                if re.search(pattern, query_lower, re.IGNORECASE):
                     is_sla_comparison = True
                     intent["action"] = "compare"
                     intent["comparison"] = True
@@ -977,21 +985,27 @@ class SmartHandlerBase:
         
         # Enhanced SLA comparison detection - ONLY when SLA is explicitly mentioned
         sla_patterns = [
-            "sla.*closed on time.*not closed on time",  # SLA with explicit timing language
-            "sla.*closed vs not closed",                # SLA mentioned with closed comparison
-            "closed vs not closed.*sla",                # Closed comparison with SLA mentioned
-            "sla.*on time vs not on time",              # SLA with timing comparison
-            "on time vs not on time.*sla",              # Timing comparison with SLA
-            "met sla vs missed sla",                    # Direct SLA comparison
-            "sla met vs sla missed"                     # Direct SLA comparison
+            r"sla.*closed on time.*not closed on time",  # SLA with explicit timing language
+            r"sla.*closed vs not closed",                # SLA mentioned with closed comparison
+            r"closed vs not closed.*sla",                # Closed comparison with SLA mentioned
+            r"sla.*on time vs not on time",              # SLA with timing comparison
+            r"on time vs not on time.*sla",              # Timing comparison with SLA
+            r"met sla vs missed sla",                    # Direct SLA comparison
+            r"sla met vs sla missed",                    # Direct SLA comparison
+            r"support tickets closed on time vs not closed on time based on sla",
+            r"closed vs not closed on time.*sla", 
+            r"closed vs not closed.*on time.*sla",
+            r".*closed on time.*not closed on time.*based on sla.*",  # More flexible pattern
+            r".*sla.*closed on time.*not closed on time.*"   # More flexible pattern
         ]
         
         # Check if this is an SLA-related comparison (SLA must be explicitly mentioned)
+        # BUT only apply SLA logic for UserRequest/Incident classes, not generic Ticket
         is_sla_comparison = False
-        if "sla" in query_lower:  # Only check SLA patterns if SLA is mentioned
-            is_sla_comparison = any(re.search(pattern, query_lower) for pattern in sla_patterns)
+        if "sla" in query_lower and self.class_name in ["UserRequest", "Incident"]:  
+            is_sla_comparison = any(re.search(pattern, query_lower, re.IGNORECASE) for pattern in sla_patterns)
         
-        # Apply SLA comparison only if SLA is explicitly mentioned AND patterns match
+        # Apply SLA comparison only if SLA is explicitly mentioned AND class supports it
         if is_sla_comparison:
             return await self._handle_sla_comparison(query, intent, limit)
         
@@ -1558,14 +1572,48 @@ class UserRequestHandler(SmartHandlerBase):
             "ordering": None  # Added for latest/newest ordering
         }
         
-        # Detect action type
-        if any(word in query_lower for word in ["count", "how many", "number of", "total count"]):
-            intent["action"] = "count"
-        elif any(word in query_lower for word in ["stats", "statistics", "breakdown", "by status", "group by"]):
-            intent["action"] = "stats"
-        elif any(word in query_lower for word in ["compare", "vs", "versus", "v/s"]):
+        # Detect action type - Enhanced comparison detection first with high priority
+        is_comparison = any(word in query_lower for word in ["vs", "versus", "v/s", "compared to", "compare"])
+        is_count_request = any(word in query_lower for word in ["count", "how many", "number of", "total count"]) and not is_comparison
+        is_stats_request = any(word in query_lower for word in ["stats", "statistics", "breakdown", "by status", "group by"]) and not is_comparison
+        
+        # PRIORITY ORDER: comparison > count > stats > list
+        # This ensures that queries like "count of tickets vs" are treated as comparisons
+        if is_comparison:
             intent["action"] = "compare"
             intent["comparison"] = True
+        elif is_count_request:
+            intent["action"] = "count"
+        elif is_stats_request:
+            intent["action"] = "stats"
+        
+        # Enhanced SLA comparison detection - ONLY for explicit SLA mentions
+        # Only apply SLA comparison when both "sla" AND comparison terms are present
+        sla_comparison_patterns = [
+            r"sla.*closed on time.*not closed on time",  # SLA with explicit timing language
+            r"sla.*closed vs not closed",                # SLA mentioned with closed comparison
+            r"closed vs not closed.*sla",                # Closed comparison with SLA mentioned
+            r"sla.*on time vs not on time",              # SLA with timing comparison
+            r"on time vs not on time.*sla",              # Timing comparison with SLA
+            r"met sla vs missed sla",                    # Direct SLA comparison
+            r"sla met vs sla missed",                    # Direct SLA comparison
+            r"support tickets closed on time vs not closed on time based on sla",
+            r"closed vs not closed on time.*sla", 
+            r"closed vs not closed.*on time.*sla",
+            r".*closed on time.*not closed on time.*based on sla.*",  # More flexible pattern
+            r".*sla.*closed on time.*not closed on time.*"   # More flexible pattern
+        ]
+        
+        # Check if this is an SLA-related comparison (must have explicit SLA mention)
+        is_sla_comparison = False
+        if "sla" in query_lower:  # Only check patterns if SLA is mentioned
+            for pattern in sla_comparison_patterns:
+                if re.search(pattern, query_lower, re.IGNORECASE):
+                    is_sla_comparison = True
+                    intent["action"] = "compare"
+                    intent["comparison"] = True
+                    intent["sla_analysis"] = True
+                    break
         
         # Detect SLA-related queries
         if any(word in query_lower for word in ["sla", "on time", "late", "overdue", "deadline", "closed on time", "not closed on time"]):
@@ -1832,17 +1880,27 @@ class TicketHandler(SmartHandlerBase):
             "action": "list",
             "filters": [],
             "grouping": None,
-            "fields": []
+            "fields": [],
+            "comparison": False,
+            "sla_analysis": False
         }
         
-        # Determine action
-        if any(word in query_lower for word in ["count", "how many", "total"]):
+        # Detect action type - Enhanced comparison detection first with high priority
+        is_comparison = any(word in query_lower for word in ["vs", "versus", "v/s", "compared to"])
+        is_count_request = any(word in query_lower for word in ["count", "how many", "total"]) and not is_comparison
+        is_grouping = any(word in query_lower for word in ["group by", "grouped by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org"]) and not is_comparison
+        
+        # PRIORITY ORDER: comparison > count > grouping > list
+        if is_comparison:
+            intent["action"] = "compare"
+            intent["comparison"] = True
+        elif is_count_request:
             intent["action"] = "count"
-        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org"]):
+        elif is_grouping:
             intent["action"] = "group"
             intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
         
-        # Add filters using smart engine
+        # Add filters using smart engine (NO SLA logic for generic tickets)
         intent["filters"] = SmartFilterEngine.extract_filters(query_lower, self.class_name)
         
         return intent
@@ -1877,12 +1935,11 @@ class TicketHandler(SmartHandlerBase):
             result += f"\n**Note**: Showing UserRequests since generic Ticket class doesn't have priority field. Other ticket types (Incident, Problem, Change) would need separate queries."
             return result
         
-        # Handle SLA comparison queries specifically for tickets
-        if ("closed" in query_lower and "time" in query_lower and 
-            any(comp_word in query_lower for comp_word in ["vs", "versus", "compared to", "comparison"])):
-            return await self._handle_ticket_sla_comparison(query, limit)
+        intent = self.parse_query_intent(query)
         
-        intent = self._parse_query_intent(query)
+        # Handle comparison queries using base class logic (NO SLA logic for generic tickets)
+        if intent["comparison"]:
+            return await super()._handle_comparison_query(query, intent, limit)
         
         # Build OQL query
         oql_query = self.build_oql_query(intent)
@@ -1899,55 +1956,6 @@ class TicketHandler(SmartHandlerBase):
         
         result = await self.client.make_request(operation)
         return self._format_results(result, intent, query, oql_query)
-    
-    async def _handle_ticket_sla_comparison(self, query: str, limit: int) -> str:
-        """Handle SLA comparison queries for all ticket types"""
-        
-        # Query 1: Closed tickets (all types)
-        closed_operation = {
-            "operation": "core/get",
-            "class": self.class_name,
-            "key": "SELECT Ticket WHERE operational_status = 'closed'",
-            "output_fields": "id,operational_status,finalclass",
-            "limit": limit
-        }
-        
-        # Query 2: Open/ongoing tickets (all types)  
-        open_operation = {
-            "operation": "core/get",
-            "class": self.class_name,
-            "key": "SELECT Ticket WHERE operational_status = 'ongoing'",
-            "output_fields": "id,operational_status,finalclass",
-            "limit": limit
-        }
-        
-        # Execute both queries
-        closed_result = await self.client.make_request(closed_operation)
-        open_result = await self.client.make_request(open_operation)
-        
-        output = f"**🔄 Ticket Status Comparison**\n\n"
-        output += f"**Query**: \"{query}\"\n\n"
-        
-        # Process closed tickets
-        if closed_result.get("code") == 0:
-            closed_count = _extract_count_from_message(closed_result.get("message", ""))
-            if closed_count is None:
-                closed_count = len(closed_result.get("objects", {}))
-        else:
-            closed_count = f"Error: {closed_result.get('message', 'Unknown error')}"
-        
-        # Process open tickets
-        if open_result.get("code") == 0:
-            open_count = _extract_count_from_message(open_result.get("message", ""))
-            if open_count is None:
-                open_count = len(open_result.get("objects", {}))
-        else:
-            open_count = f"Error: {open_result.get('message', 'Unknown error')}"
-        
-        output += f"📊 **Closed Tickets**: {closed_count}\n"
-        output += f"📊 **Open Tickets**: {open_count}\n\n"
-        
-        return output
     
     def _parse_query_intent(self, query: str) -> Dict[str, Any]:
         """Parse query intent for tickets"""
