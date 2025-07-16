@@ -195,23 +195,28 @@ def smart_class_detection(query: str) -> tuple[str, float, dict]:
     if ("software" in query_lower or "application" in query_lower) and "server" in query_lower:
         return "Server", 0.95, {"action": "list", "include_relationships": True}
     
-    # PRIORITY 2: SLA/support ticket queries should use UserRequest  
+    # PRIORITY 2: Distinguish between generic tickets and support tickets
+    # Generic "tickets" (without "support") should use Ticket class
+    if "tickets" in query_lower and "support" not in query_lower and "user request" not in query_lower:
+        return "Ticket", 0.90, {"action": "list", "generic_tickets": True}
+    
+    # PRIORITY 3: SLA/support ticket queries should use UserRequest  
     sla_patterns = ["sla", "support ticket", "support tickets", "sla issues", "with sla"]
     for pattern in sla_patterns:
         if pattern in query_lower and "change" not in query_lower:
             # Force UserRequest for SLA queries (but not for change requests)
             return "UserRequest", 0.95, {"action": "list", "time_analysis": True}
     
-    # PRIORITY 3: Team assignment queries - Use UserRequest for most team-based ticket queries
+    # PRIORITY 4: Team assignment queries - Use UserRequest for most team-based ticket queries
     if "team" in query_lower and any(ticket_word in query_lower for ticket_word in ["ticket", "tickets", "user request", "support", "assigned"]):
         # Most team-related ticket queries should use UserRequest for better compatibility
         return "UserRequest", 0.90, {"action": "list", "team_filter": True}
     
-    # PRIORITY 4: Contact vs Person disambiguation for service managers
+    # PRIORITY 5: Contact vs Person disambiguation for service managers
     if "contact" in query_lower and "service manager" in query_lower:
         return "Contact", 0.95, {"action": "list", "role_filter": True}
     
-    # PRIORITY 5: Standard taxonomy-based detection
+    # PRIORITY 6: Standard taxonomy-based detection
     for category_list in ITOP_CLASS_TAXONOMY.values():
         for category in category_list:
             for class_name in category["classes"]:
@@ -869,14 +874,40 @@ class SmartHandlerBase:
             "sla_analysis": False
         }
         
-        # Detect action type
-        if any(word in query_lower for word in ["count", "how many", "total"]):
+        # Detect action type - Enhanced comparison detection first
+        is_comparison = any(word in query_lower for word in ["vs", "versus", "v/s", "compared to"])
+        is_count_request = any(word in query_lower for word in ["count", "how many", "total"]) and not is_comparison
+        
+        if is_comparison:
+            intent["action"] = "compare"
+            intent["comparison"] = True
+        elif is_count_request:
             intent["action"] = "count"
         elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org", "by status", "by priority", "by team", "by agent", "by type"]):
             intent["action"] = "group"
-        elif any(word in query_lower for word in ["compare", "vs", "versus", "v/s"]):
-            intent["action"] = "compare"
-            intent["comparison"] = True
+        
+        # Enhanced SLA comparison detection - ONLY for explicit SLA mentions
+        # Only apply SLA comparison when both "sla" AND comparison terms are present
+        sla_comparison_patterns = [
+            "sla. *closed on time vs not closed on time",  # Explicit SLA timing language
+            "sla.*closed vs not closed",             # SLA mentioned with closed comparison
+            "closed vs not closed.*sla",             # Closed comparison with SLA mentioned  
+            "sla.*on time vs not on time",           # SLA with timing comparison
+            "on time vs not on time.*sla",           # Timing comparison with SLA
+            "met sla vs missed sla",                 # Direct SLA comparison
+            "sla met vs sla missed"                  # Direct SLA comparison
+        ]
+        
+        # Check if this is an SLA-related comparison (must have explicit SLA mention)
+        is_sla_comparison = False
+        if "sla" in query_lower:  # Only check patterns if SLA is mentioned
+            for pattern in sla_comparison_patterns:
+                if re.search(pattern, query_lower):
+                    is_sla_comparison = True
+                    intent["action"] = "compare"
+                    intent["comparison"] = True
+                    intent["sla_analysis"] = True
+                    break
         
         # Detect SLA analysis
         if any(word in query_lower for word in ["sla"]):
@@ -944,8 +975,24 @@ class SmartHandlerBase:
         """Universal comparison query handler"""
         query_lower = query.lower()
         
-        # Handle SLA comparisons
-        if "closed on time" in query_lower and ("not closed on time" in query_lower or "not on time" in query_lower):
+        # Enhanced SLA comparison detection - ONLY when SLA is explicitly mentioned
+        sla_patterns = [
+            "sla.*closed on time.*not closed on time",  # SLA with explicit timing language
+            "sla.*closed vs not closed",                # SLA mentioned with closed comparison
+            "closed vs not closed.*sla",                # Closed comparison with SLA mentioned
+            "sla.*on time vs not on time",              # SLA with timing comparison
+            "on time vs not on time.*sla",              # Timing comparison with SLA
+            "met sla vs missed sla",                    # Direct SLA comparison
+            "sla met vs sla missed"                     # Direct SLA comparison
+        ]
+        
+        # Check if this is an SLA-related comparison (SLA must be explicitly mentioned)
+        is_sla_comparison = False
+        if "sla" in query_lower:  # Only check SLA patterns if SLA is mentioned
+            is_sla_comparison = any(re.search(pattern, query_lower) for pattern in sla_patterns)
+        
+        # Apply SLA comparison only if SLA is explicitly mentioned AND patterns match
+        if is_sla_comparison:
             return await self._handle_sla_comparison(query, intent, limit)
         
         # Handle "closed vs not closed" or "completed vs not completed" comparisons
@@ -1142,9 +1189,9 @@ class SmartHandlerBase:
             not_completed_count = results.get('not_completed', 0)
             
             output += f"📊 **Completed**: {completed_count} {self.class_name.lower()}s\n"
-            output += f"� **Not Completed**: {not_completed_count} {self.class_name.lower()}s\n"
+            output += f"📊 **Not Completed**: {not_completed_count} {self.class_name.lower()}s\n"
         else:
-            output = f"**�🔄 {self.class_name} Status Comparison**\n\n"
+            output = f"**🔄 {self.class_name} Status Comparison**\n\n"
             output += f"**Query**: \"{query}\"\n\n"
             
             output += f"**OQL for Closed**: `{oqls.get('closed', 'N/A')}`\n"
