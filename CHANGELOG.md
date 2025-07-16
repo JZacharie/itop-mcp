@@ -5,6 +5,42 @@ All notable changes to the iTop MCP Server will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-07-16
+
+### Added
+- **Smart Query Processor V2**: Complete rewrite with class-specific handlers for enhanced natural language query processing
+- **Specialized Class Handlers**: Dedicated handlers for 12+ iTop classes including:
+  - **Ticket Management**: UserRequest, Ticket, Change, Incident, Problem
+  - **Infrastructure**: Server, PC, VirtualMachine, NetworkDevice  
+  - **People & Organization**: Person, Team, Organization
+- **Advanced Query Features**:
+  - Automatic class detection from natural language queries
+  - Real-time schema discovery using `*+` output fields
+  - Intelligent field mapping with user-friendly aliases
+  - Enhanced filtering with regex pattern matching
+  - Sophisticated grouping and breakdown capabilities
+  - SLA compliance analysis and deadline tracking
+  - Multi-server name detection with fuzzy matching
+- **Enhanced Result Formatting**:
+  - Class-specific output formatting with relevant icons
+  - Detailed vs summary view modes
+  - Grouped results with statistical breakdowns
+  - Software-focused results for infrastructure queries
+  - Improved error handling with actionable suggestions
+- **Generic Handler Framework**: Fallback support for classes without specific handlers
+- **Extensible Architecture**: Easy addition of new class handlers following the base pattern
+
+### Enhanced
+- **Query Intelligence**: Improved natural language understanding for complex ITSM scenarios
+- **Field Mappings**: Comprehensive field mappings for each supported class
+- **Error Handling**: Better error messages with troubleshooting guidance
+- **Performance**: Optimized queries with targeted field selection
+
+### Technical Improvements
+- **Code Organization**: Modular handler-based architecture for better maintainability
+- **Type Safety**: Enhanced type annotations and validation
+- **Documentation**: Inline documentation for all handler classes and methods
+
 ## [1.1.0] - 2025-07-10
 
 ### Added

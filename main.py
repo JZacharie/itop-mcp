@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-iTop MCP Server
-
-A Model Context Protocol server for interacting with iTop ITSM system via REST API.
-Provides tools for managing tickets, CIs, and other iTop objects.
+Smart iTop Query Processor V2 - Simplified and Class-Specific
 """
-
 import json
 import os
 import re
-from typing import Any, Optional, Union
+from typing import Any, Optional, Dict, List
+from datetime import datetime, timedelta
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -60,749 +57,25 @@ class ITopClient:
             except json.JSONDecodeError as e:
                 raise ValueError(f"Invalid JSON response: {e}") from e
 
-
-# Initialize iTop client
 def get_itop_client() -> ITopClient:
     """Get configured iTop client"""
     if not all([ITOP_BASE_URL, ITOP_USER, ITOP_PASSWORD]):
         raise ValueError("Missing required environment variables: ITOP_BASE_URL, ITOP_USER, ITOP_PASSWORD")
     return ITopClient(ITOP_BASE_URL, ITOP_USER, ITOP_PASSWORD, ITOP_VERSION)
 
-
-@mcp.tool()
-async def list_operations() -> str:
-    """List all available operations in the iTop REST API."""
-    try:
-        client = get_itop_client()
-        operation_data = {"operation": "list_operations"}
-        result = await client.make_request(operation_data)
-        
-        if result.get("code") != 0:
-            return f"Error: {result.get('message', 'Unknown error')}"
-        
-        operations = result.get("operations", [])
-        output = "Available iTop REST API operations:\n\n"
-        
-        for op in operations:
-            output += f"• {op.get('verb', 'Unknown')}: {op.get('description', 'No description')}\n"
-        
-        return output
-    except Exception as e:
-        return f"Error listing operations: {str(e)}"
-
-
-@mcp.tool()
-async def get_objects(
-    class_name: str, 
-    key: Optional[str] = None, 
-    output_fields: str = "*", 
-    limit: int = 20,
-    format_output: str = "detailed"
-) -> str:
-    """
-    Get objects from iTop with optimized performance and flexible output formatting.
-    
-    Args:
-        class_name: The iTop class name (e.g., UserRequest, Person, Organization)
-        key: Optional search criteria. Can be an ID, OQL query, or JSON search criteria
-        output_fields: Comma-separated list of fields to return, or "*" for all fields
-        limit: Maximum number of objects to return (default: 20, max: 100)
-        format_output: Output format - "detailed", "summary", "table", or "json" (default: detailed)
-    """
-    try:
-        # Validate inputs
-        if limit > 100:
-            limit = 100
-        if limit < 1:
-            limit = 1
-            
-        valid_formats = ["detailed", "summary", "table", "json"]
-        if format_output not in valid_formats:
-            format_output = "detailed"
-        
-        client = get_itop_client()
-        
-        # Build operation data more efficiently
-        operation_data = {
-            "operation": "core/get",
-            "class": class_name,
-            "output_fields": output_fields,
-            "limit": limit
-        }
-        
-        # Optimized key handling with better validation
-        if key:
-            key = key.strip()
-            if key.upper().startswith("SELECT"):
-                # OQL query - validate basic syntax
-                if not key.upper().startswith(f"SELECT {class_name.upper()}"):
-                    key = f"SELECT {class_name} WHERE {key[6:].strip()}" if key.upper().startswith("SELECT") else key
-                operation_data["key"] = key
-            elif key.isdigit():
-                # Numeric ID
-                operation_data["key"] = int(key)
-            elif key.startswith("{") and key.endswith("}"):
-                # JSON search criteria
-                try:
-                    parsed_key = json.loads(key)
-                    operation_data["key"] = parsed_key
-                except json.JSONDecodeError as e:
-                    return f"Error: Invalid JSON in key parameter: {e}"
-            else:
-                # String ID or simple search - try as ID first, then as search
-                operation_data["key"] = key
-        else:
-            # If no key provided, select all objects of the class
-            operation_data["key"] = f"SELECT {class_name}"
-        
-        # Make the request
-        result = await client.make_request(operation_data)
-        
-        # Handle API errors
-        if result.get("code") != 0:
-            error_msg = result.get("message", "Unknown error")
-            return f"Error: {error_msg}"
-        
-        objects = result.get("objects")
-        if not objects:
-            search_info = f" matching criteria '{key}'" if key else ""
-            return f"No {class_name} objects found{search_info}."
-        
-        # Format output based on requested format
-        return _format_objects_output(objects, class_name, format_output, key)
-        
-    except Exception as e:
-        return f"Error getting objects: {str(e)}"
-
-
-def _format_field_value(value: Any, max_length: int = 500) -> str:
-    """Helper function to format field values for display with NO truncation."""
-    if value is None:
-        return "None"
-    str_value = str(value)
-    # Handle HTML content
-    if "<" in str_value and ">" in str_value:
-        str_value = re.sub(r'<[^>]+>', '', str_value).strip()
-    # Do NOT truncate values
-    str_value = str_value.replace("\n", " ").replace("\r", "")
-    return str_value
-
-
-def _format_field_value(value: Any, max_length: int = 500) -> str:
-    """Helper function to format field values for display with NO truncation."""
-    if value is None:
-        return "None"
-    str_value = str(value)
-    # Handle HTML content
-    if "<" in str_value and ">" in str_value:
-        str_value = re.sub(r'<[^>]+>', '', str_value).strip()
-    # Do NOT truncate values
-    str_value = str_value.replace("\n", " ").replace("\r", "")
-    return str_value
-
-
-def _format_objects_output(objects: dict, class_name: str, format_type: str, search_key: Optional[str] = None) -> str:
-    """Helper function to format object output in different styles (no field count/length limits)."""
-    
-    if format_type == "json":
-        # Return clean JSON format
-        clean_objects = {}
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                clean_objects[obj_key] = obj_data.get("fields", {})
-        return json.dumps(clean_objects, indent=2, default=str)
-    
-    # Prepare header
-    search_info = f" matching '{search_key}'" if search_key else ""
-    header = f"Found {len(objects)} {class_name} object(s){search_info}:\n\n"
-    
-    if format_type == "summary":
-        # Summary format - show ALL non-empty fields for each object
-        output = header
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                # Show all non-empty fields
-                field_values = [f"{field_name}: {_format_field_value(field_value)}" for field_name, field_value in fields.items() if field_value]
-                output += f"🔹 **{obj_key}** - {', '.join(field_values)}\n"
-                # Show all non-empty fields
-                field_values = [f"{field_name}: {_format_field_value(field_value)}" for field_name, field_value in fields.items() if field_value]
-                output += f"🔹 **{obj_key}** - {', '.join(field_values)}\n"
-        return output
-
-    elif format_type == "table":
-        # Table format - show ALL fields present in any object
-        output = header
-        
-        # Collect all fields across all objects (not just non-empty)
-        all_fields = set()
-        valid_objects = []
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                all_fields.update(fields.keys())
-                valid_objects.append((obj_key, fields))
-        
-        if not all_fields:
-            return output + "No fields found for table display."
-        
-        # Sort fields for consistent column order
-        display_fields = sorted(list(all_fields))
-        col_widths = {field: max(len(field), 15) for field in display_fields}
-        col_widths["key"] = max(len("Object Key"), max(len(obj_key) for obj_key, _ in valid_objects) if valid_objects else 10)
-        
-        # Header row
-        header_row = f"{'Object Key':<{col_widths['key']}} | "
-        header_row += " | ".join(f"{field:<{col_widths[field]}}" for field in all_fields)
-        output += header_row + "\n"
-        output += "-" * len(header_row) + "\n"
-        
-        # Data rows
-        for obj_key, fields in valid_objects:
-            row = f"{obj_key:<{col_widths['key']}} | "
-            row_values = []
-            for field in display_fields:
-                value = _format_field_value(fields.get(field, ""))
-                row_values.append(f"{value:<{col_widths[field]}}")
-            row += " | ".join(row_values)
-            output += row + "\n"
-        
-        return output
-    
-    else:  # detailed format (default)
-        output = header
-        
-        # Group important fields for better organization
-        priority_fields = ["id", "friendlyname", "name", "title", "status", "ref"]
-        secondary_fields = ["creation_date", "last_update", "caller_name", "agent_name", "org_name", "description"]
-        
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                output += f"🔹 **{obj_key}**\n"
-                
-                # Show priority fields first
-                for field in priority_fields:
-                    if field in fields and fields[field]:
-                        value = _format_field_value(fields[field])
-                        output += f"   {field}: {value}\n"
-                
-                # Show secondary fields
-                has_secondary = False
-                for field in secondary_fields:
-                    if field in fields and fields[field] and field not in priority_fields:
-                        if not has_secondary:
-                            output += "   ---\n"
-                            has_secondary = True
-                        value = _format_field_value(fields[field])
-                        output += f"   {field}: {value}\n"
-                
-                # Show remaining fields (collapsed)
-                remaining_fields = {k: v for k, v in fields.items() 
-                                   if k not in priority_fields + secondary_fields and v}
-                if remaining_fields:
-                    output += f"   Other fields ({len(remaining_fields)}): "
-                    field_summary = ", ".join(f"{k}={str(v)[:20]}..." if len(str(v)) > 20 else f"{k}={v}" 
-                                            for k, v in list(remaining_fields.items())[:3])
-                    output += field_summary
-                    if len(remaining_fields) > 3:
-                        output += f" and {len(remaining_fields) - 3} more..."
-                    output += "\n"
-                
-                output += "\n"
-            else:
-                output += f"❌ **{obj_key}**: Error - {obj_data.get('message', 'Unknown error')}\n\n"
-        
-        return output
-
-
-def _format_objects_output_smart(objects: dict, class_name: str, format_type: str, class_fields: dict, requested_fields: list = None, search_key: Optional[str] = None) -> str:
-    """
-    Smart helper function to format object output using dynamically discovered fields.
-    Provides rich formatting with NO field limits or value trimming.
-    Offers special handling for SLA, date fields, and relationships.
-    """
-    
-    if format_type == "json":
-        # Return clean JSON format with ALL fields
-        clean_objects = {}
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                clean_objects[obj_key] = obj_data.get("fields", {})
-        return json.dumps(clean_objects, indent=2, default=str)
-    
-    # Prepare header
-    search_info = f" matching '{search_key}'" if search_key else ""
-    header = f"Found {len(objects)} {class_name} object(s){search_info}:\n\n"
-    
-    if format_type == "summary":
-        # Summary format - show ALL non-empty fields for each object
-        output = header
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                # Show all non-empty fields
-                field_values = [f"{field_name}: {_format_field_value(field_value)}" for field_name, field_value in fields.items() if field_value]
-                output += f"🔹 **{obj_key}** - {', '.join(field_values)}\n"
-        return output
-
-    elif format_type == "table":
-        # Table format - show ALL fields present in any object
-        output = header
-        
-        # Collect all fields across all objects (not just non-empty)
-        all_fields = set()
-        valid_objects = []
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                all_fields.update(fields.keys())
-                valid_objects.append((obj_key, fields))
-        
-        if not all_fields:
-            return output + "No fields found for table display."
-        
-        # Sort fields for consistent column order
-        display_fields = sorted(list(all_fields))
-        col_widths = {field: max(len(field), 15) for field in display_fields}
-        col_widths["key"] = max(len("Object Key"), max(len(obj_key) for obj_key, _ in valid_objects) if valid_objects else 10)
-        
-        # Header row
-        header_row = f"{'Object Key':<{col_widths['key']}} | "
-        header_row += " | ".join(f"{field:<{col_widths[field]}}" for field in display_fields)
-        output += header_row + "\n"
-        output += "-" * len(header_row) + "\n"
-        
-        # Data rows
-        for obj_key, fields in valid_objects:
-            row = f"{obj_key:<{col_widths['key']}} | "
-            row_values = []
-            for field in display_fields:
-                value = _format_field_value(fields.get(field, ""))
-                row_values.append(f"{value:<{col_widths[field]}}")
-            row += " | ".join(row_values)
-            output += row + "\n"
-        
-        return output
-    
-    else:  # detailed format (default) - SHOW ALL FIELDS
-        output = header
-        
-        for obj_key, obj_data in objects.items():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                
-                output += f"🔹 **{obj_key}**\n"
-                
-                # Show ALL fields dynamically - both populated and empty fields
-                populated_fields = []
-                empty_fields = []
-                
-                for field_name, field_value in fields.items():
-                    if field_value and str(field_value).strip():  # Fields with values
-                        populated_fields.append((field_name, field_value))
-                    else:  # Empty or None fields
-                        empty_fields.append(field_name)
-                
-                # First show all populated fields
-                for field_name, field_value in populated_fields:
-                    output += f"   **{field_name}**: {_format_field_value(field_value)}\n"
-                
-                # Then show empty fields in a compact format (optional detail)
-                if empty_fields:
-                    output += f"   *Empty fields*: {', '.join(empty_fields[:10])}"
-                    if len(empty_fields) > 10:
-                        output += f" (+{len(empty_fields) - 10} more)"
-                    output += "\n"
-                
-                output += "\n"
-        
-        return output
-
-
-async def discover_field_values(class_name: str, field_name: str, limit: int = 100) -> dict:
-    """
-    **UNIVERSAL FIELD VALUE DISCOVERY**
-    
-    Dynamically discover unique values for ANY field in ANY iTop class.
-    This is the core function that enables truly schema-adaptive queries.
-    
-    Args:
-        class_name: The iTop class to query
-        field_name: The specific field to discover values for
-        limit: Max number of unique values to sample (default: 100)
-    
-    Returns:
-        dict: {
-            "values": [list of unique values],
-            "total_sampled": int,
-            "field_type": "enum|text|numeric|date|boolean",
-            "sample_pattern": "detected pattern if any"
-        }
-    """
-    try:
-        client = get_itop_client()
-        
-        # Get a larger sample to discover unique values
-        sample_size = min(limit * 3, 500)  # Sample more to get diverse values
-        
-        operation_data = {
-            "operation": "core/get",
-            "class": class_name,
-            "key": f"SELECT {class_name}",
-            "output_fields": f"id,{field_name}",  # Only get ID and the field we're interested in
-            "limit": sample_size
-        }
-        
-        result = await client.make_request(operation_data)
-        
-        if result.get("code") != 0:
-            return {"values": [], "total_sampled": 0, "field_type": "unknown", "sample_pattern": ""}
-        
-        objects = result.get("objects", {})
-        if not objects:
-            return {"values": [], "total_sampled": 0, "field_type": "unknown", "sample_pattern": ""}
-        
-        # Extract and analyze field values
-        values = []
-        for obj_data in objects.values():
-            if obj_data.get("code") == 0:
-                fields = obj_data.get("fields", {})
-                value = fields.get(field_name)
-                if value is not None and value != "":
-                    values.append(str(value))
-        
-        # Get unique values (preserve order)
-        unique_values = []
-        seen = set()
-        for value in values:
-            if value not in seen:
-                unique_values.append(value)
-                seen.add(value)
-                if len(unique_values) >= limit:
-                    break
-        
-        # Analyze field type and patterns
-        field_analysis = _analyze_field_values(unique_values, field_name)
-        
-        return {
-            "values": unique_values,
-            "total_sampled": len(values),
-            "field_type": field_analysis["type"],
-            "sample_pattern": field_analysis["pattern"],
-            "confidence": field_analysis["confidence"]
-        }
-        
-    except Exception as e:
-        return {"values": [], "total_sampled": 0, "field_type": "unknown", "sample_pattern": "", "error": str(e)}
-
-def _analyze_field_values(values: list, field_name: str) -> dict:
-    """
-    Analyze field values to determine type, patterns, and confidence.
-    This helps the AI understand what kind of field it's working with.
-    """
-    if not values:
-        return {"type": "unknown", "pattern": "", "confidence": 0}
-    
-    field_lower = field_name.lower()
-    
-    # Determine field type based on values and field name
-    field_type = "text"  # default
-    pattern = ""
-    confidence = 0.5
-    
-    # Check for numeric values
-    numeric_count = 0
-    for value in values:
-        try:
-            float(value)
-            numeric_count += 1
-        except ValueError:
-            pass
-    
-    if numeric_count > len(values) * 0.8:
-        field_type = "numeric"
-        confidence = 0.9
-    
-    # Check for boolean-like values
-    boolean_indicators = {"yes", "no", "true", "false", "1", "0", "on", "off", "enabled", "disabled"}
-    if all(value.lower() in boolean_indicators for value in values):
-        field_type = "boolean"
-        confidence = 0.95
-    
-    # Check for date patterns
-    date_patterns = [
-        r'\d{4}-\d{2}-\d{2}',  # YYYY-MM-DD
-        r'\d{2}/\d{2}/\d{4}',  # MM/DD/YYYY
-        r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}'  # YYYY-MM-DD HH:MM:SS
-    ]
-    
-    date_matches = 0
-    for value in values:
-        for pattern_regex in date_patterns:
-            if re.match(pattern_regex, value):
-                date_matches += 1
-                break
-    
-    if date_matches > len(values) * 0.7:
-        field_type = "date"
-        confidence = 0.9
-    
-    # Check for enumeration (limited unique values)
-    if len(set(values)) <= 20 and len(values) > 10:
-        field_type = "enum"
-        confidence = 0.8
-        pattern = f"enum({len(set(values))} unique values)"
-    
-    # Field name analysis for additional confidence
-    if any(indicator in field_lower for indicator in ["status", "state", "type", "priority", "level"]):
-        field_type = "enum"
-        confidence = min(confidence + 0.2, 1.0)
-    
-    if any(indicator in field_lower for indicator in ["date", "time", "created", "modified", "updated"]):
-        field_type = "date"
-        confidence = min(confidence + 0.2, 1.0)
-    
-    if any(indicator in field_lower for indicator in ["id", "count", "number", "size", "amount"]):
-        field_type = "numeric"
-        confidence = min(confidence + 0.2, 1.0)
-    
-    return {
-        "type": field_type,
-        "pattern": pattern,
-        "confidence": confidence
-    }
-
-def classify_query_complexity(query: str, query_analysis: dict) -> dict:
-    """
-    **QUERY INTELLIGENCE CLASSIFIER**
-    
-    Determines whether a query is simple (list all) or complex (needs value discovery).
-    This is the key function that prevents over-processing simple queries.
-    
-    Returns:
-        dict: {
-            "complexity": "simple|moderate|complex",
-            "needs_value_discovery": bool,
-            "discovery_fields": [list of fields that need value discovery],
-            "reasoning": "explanation of classification"
-        }
-    """
-    query_lower = query.lower()
-    
-    # Simple query indicators
-    simple_indicators = [
-        "list all", "show all", "get all", "display all",
-        "list", "show", "get", "display", "fetch",
-        "what are", "give me"
-    ]
-    
-    # Complex query indicators
-    complex_indicators = [
-        "where", "with", "having", "filter", "only",
-        "by status", "by type", "by priority", "by organization",
-        "count by", "group by", "breakdown by", "based stats", "stats",
-        "running", "using", "containing", "matching",
-        "more than", "less than", "greater than", "equal to",
-        "in", "not in", "between", "vs", "versus", "closed", "on time"
-    ]
-    
-    # Check for simple patterns first
-    is_simple = False
-    for indicator in simple_indicators:
-        if indicator in query_lower:
-            # Check if it's truly simple (no additional complexity)
-            remaining_query = query_lower.replace(indicator, "").strip()
-            if len(remaining_query.split()) <= 3:  # e.g., "list all servers"
-                is_simple = True
-                break
-    
-    # Check for complex patterns
-    complexity_score = 0
-    detected_complex_indicators = []
-    
-    for indicator in complex_indicators:
-        if indicator in query_lower:
-            complexity_score += 1
-            detected_complex_indicators.append(indicator)
-    
-    # Analyze discovered filters from query analysis
-    discovered_filters = query_analysis.get("discovered_filters", [])
-    raw_filters = query_analysis.get("raw_filters", [])
-    
-    # Determine fields that need value discovery
-    discovery_fields = []
-    
-    # From discovered filters - only for complex queries
-    for filter_info in discovered_filters:
-        field = filter_info.get("field")
-        if field and field not in discovery_fields:
-            discovery_fields.append(field)
-    
-    # From grouping
-    if query_analysis.get("grouping"):
-        grouping_field = query_analysis["grouping"]
-        if grouping_field not in discovery_fields:
-            discovery_fields.append(grouping_field)
-    
-    # From raw filters that might need field mapping
-    for raw_filter in raw_filters:
-        category = raw_filter.get("category")
-        if category and category not in ["memory", "priority"]:  # Skip numeric categories
-            discovery_fields.append(category)  # Will be mapped to actual field later
-    
-    # Final classification
-    if is_simple and complexity_score == 0 and not discovery_fields:
-        return {
-            "complexity": "simple",
-            "needs_value_discovery": False,
-            "discovery_fields": [],
-            "reasoning": f"Simple query detected: '{query}' - no filtering or grouping needed"
-        }
-    
-    elif complexity_score <= 2 and len(discovery_fields) <= 2:
-        return {
-            "complexity": "moderate",
-            "needs_value_discovery": True,
-            "discovery_fields": discovery_fields,
-            "reasoning": f"Moderate complexity: {complexity_score} indicators, {len(discovery_fields)} fields need discovery"
-        }
-    
-    else:
-        return {
-            "complexity": "complex",
-            "needs_value_discovery": True,
-            "discovery_fields": discovery_fields,
-            "reasoning": f"Complex query: {complexity_score} indicators, {len(discovery_fields)} fields need discovery"
-        }
-
-async def enhance_query_analysis_with_values(query_analysis: dict, class_name: str, class_fields: dict) -> dict:
-    """
-    **INTELLIGENT VALUE DISCOVERY ENHANCER**
-    
-    Enhances query analysis by discovering actual field values for fields that need it.
-    Only runs when query complexity analysis determines it's needed.
-    
-    This is what makes the MCP truly intelligent - it can adapt to any field, any query.
-    """
-    enhanced_analysis = query_analysis.copy()
-    
-    # Get fields that need value discovery
-    discovery_fields = []
-    field_mappings = {}
-    
-    # From discovered filters - get actual field names, especially those marked for value discovery
-    for filter_info in query_analysis.get("discovered_filters", []):
-        field = filter_info.get("field")
-        needs_discovery = filter_info.get("needs_value_discovery", False)
-        if field and field in class_fields.get("field_names", []):
-            if needs_discovery or field not in discovery_fields:
-                discovery_fields.append(field)
-    
-    # From grouping - find actual field name
-    if query_analysis.get("grouping"):
-        grouping_term = query_analysis["grouping"]
-        actual_field = find_semantically_similar_field(grouping_term, class_fields.get("field_names", []))
-        if actual_field:
-            discovery_fields.append(actual_field)
-            field_mappings[grouping_term] = actual_field
-    
-    # From raw filters - map to actual fields and discover values
-    for raw_filter in query_analysis.get("raw_filters", []):
-        category = raw_filter.get("category")
-        if category:
-            # Map category to actual field
-            mapped_filter = await map_filter_to_field(raw_filter, class_fields)
-            if mapped_filter:
-                field = mapped_filter["field"]
-                if field not in discovery_fields:
-                    discovery_fields.append(field)
-                    field_mappings[category] = field
-    
-    # Now discover values for the identified fields
-    enhanced_analysis["field_value_discovery"] = {}
-    
-    for field in discovery_fields:
-        print(f"🔍 Discovering values for field: {field}")
-        
-        # Discover values for this field
-        field_values = await discover_field_values(class_name, field, limit=50)
-        
-        enhanced_analysis["field_value_discovery"][field] = field_values
-        
-        # If values were discovered, enhance the filters
-        if field_values["values"]:
-            # Update discovered filters with better value mapping
-            for filter_info in enhanced_analysis.get("discovered_filters", []):
-                if filter_info.get("field") == field:
-                    original_value = filter_info.get("value", "")
-                    
-                    # Try to find better matching value from discovered values
-                    best_match = find_best_value_match(original_value, field_values["values"])
-                    
-                    if best_match and best_match != original_value:
-                        filter_info["value"] = best_match
-                        filter_info["value_source"] = "discovered"
-                        filter_info["original_value"] = original_value
-    
-    # Update field mappings in analysis
-    enhanced_analysis["field_mappings"] = field_mappings
-    
-    return enhanced_analysis
-
-def find_best_value_match(search_value: str, available_values: list) -> str:
-    """
-    Find the best matching value from available values for a search term.
-    Uses fuzzy matching to handle variations in user input.
-    """
-    if not available_values:
-        return search_value
-    
-    search_lower = str(search_value).lower()
-    
-    # Exact match first
-    for value in available_values:
-        if str(value).lower() == search_lower:
-            return value
-    
-    # Partial match
-    for value in available_values:
-        if search_lower in str(value).lower() or str(value).lower() in search_lower:
-            return value
-    
-    # Fuzzy matching for common variations
-    fuzzy_mappings = {
-        "active": ["production", "enabled", "on", "running", "ongoing"],
-        "inactive": ["obsolete", "disabled", "off", "stopped"],
-        "new": ["pending", "draft", "created"],
-        "closed": ["resolved", "completed", "done"],
-        "open": ["active", "assigned", "in_progress", "ongoing", "new"]
-    }
-    
-    for key, variations in fuzzy_mappings.items():
-        if search_lower == key:
-            for variation in variations:
-                for value in available_values:
-                    if variation in str(value).lower():
-                        return value
-    
-    return search_value
-
-
-# Comprehensive iTop Class Mapping for Smart Query Processing
 ITOP_CLASS_TAXONOMY = {
     "SearchUseCases": [
       {
         "name": "Tickets",
-        "classes": ["Ticket", "UserRequest", "Incident", "Problem", "Change"],
+        "classes": ["UserRequest", "Ticket", "Incident", "Problem", "Change"],
         "description": "ITSM ticket objects",
-        "keywords": ["ticket", "tickets", "request", "requests", "issue", "issues", "incident", "incidents", "problem", "problems", "change", "changes", "support"]
+        "keywords": ["user request", "user requests", "support ticket", "support tickets", "show me tickets", "request", "requests", "issue", "issues", "incident", "incidents", "problem", "problems", "known error", "known errors", "root cause", "root cause analysis", "change", "changes", "support"]
       },
       {
         "name": "Change Requests",
-        "classes": ["RoutineChange", "NormalChange", "ApprovedChange", "EmergencyChange"],
+        "classes": ["RoutineChange", "NormalChange", "ApprovedChange", "EmergencyChange", "Change"],
         "description": "Various types of change tickets",
-        "keywords": ["change request", "change requests", "routine change", "normal change", "approved change", "emergency change"]
+        "keywords": ["change request", "change requests", "routine change", "normal change", "approved change", "emergency change", "changes"]
       },
       {
         "name": "PCs / End‑User Devices",
@@ -846,7 +119,7 @@ ITOP_CLASS_TAXONOMY = {
         "name": "People & Contacts",
         "classes": ["Person", "Contact"],
         "description": "Individual people and generic contacts",
-        "keywords": ["person", "people", "contact", "contacts", "user", "users"]
+        "keywords": ["person", "people", "people in organization", "contact", "contacts", "user", "users"]
       },
       {
         "name": "Teams & Organizations",
@@ -874,13 +147,7 @@ ITOP_CLASS_TAXONOMY = {
         "name": "Linking / Relationship Classes",
         "classes": [
           "lnkContactToTicket", "lnkDocumentToLicence", "lnkSoftwareInstanceToSoftwarePatch",
-          "lnkFunctionalCIToTicket", "lnkVirtualDeviceToVolume", "lnkConnectableCIToNetworkDevice",
-          "lnkPersonToTeam", "lnkSubnetToVLAN", "lnkGroupToCI", "lnkErrorToFunctionalCI",
-          "lnkDocumentToError", "lnkContactToService", "lnkCustomerContractToService",
-          "lnkCustomerContractToFunctionalCI", "lnkDocumentToTeam", "lnkNetworkDeviceToTeam",
-          "lnkServerToTeam", "lnkFunctionalCIToProviderContract", "lnkFunctionalCIToService",
-          "lnkFunctionalCIToTicket", "lnkDocumentToFunctionalCI", "lnkDocumentToSoftware",
-          "lnkDocumentToPatch", "lnkContactToFunctionalCI", "lnkVirtualDeviceToVolume"
+          "lnkFunctionalCIToTicket", "lnkVirtualDeviceToVolume", "lnkConnectableCIToNetworkDevice"
         ],
         "description": "Association/link tables between records",
         "keywords": ["link", "relationship", "lnk", "assoc", "association"]
@@ -889,1579 +156,101 @@ ITOP_CLASS_TAXONOMY = {
     "OperationalAndAudit": [
       {
         "name": "CMDB Change Logs",
-        "classes": [
-          "CMDBChange", "CMDBChangeOp", "CMDBChangeOpCreate", "CMDBChangeOpDelete",
-          "CMDBChangeOpSetAttribute", "CMDBChangeOpSetAttributeCustomFields",
-          "CMDBChangeOpSetAttributeLinks", "CMDBChangeOpSetAttributeLongText",
-          "CMDBChangeOpSetAttributeHTML", "CMDBChangeOpSetAttributeURL",
-          "CMDBChangeOpSetAttributeCaseLog", "CMDBChangeOpSetAttributeEncrypted",
-          "CMDBChangeOpSetAttributeOneWayPassword", "CMDBChangeOpSetAttributeBlob",
-          "CMDBChangeOpSetAttributeScalar"
-        ],
+        "classes": ["CMDBChange", "CMDBChangeOp"],
         "description": "Detailed change tracking records",
         "keywords": ["cmdb", "change log", "audit"]
       },
       {
         "name": "Automation / Workflows / Notifications",
-        "classes": ["Action", "ActionEmail", "ActionWebhook", "ActionSlackNotification", "Trigger", "TriggerOnObject", "TriggerOnObjectCreate", "TriggerOnStateChange", "TriggerOnPortalUpdate", "Event", "EventNotification", "EventWebhook"],
+        "classes": ["Action", "ActionEmail", "ActionWebhook", "Trigger", "Event"],
         "description": "Workflow actions, triggers, and events",
         "keywords": ["action", "trigger", "workflow", "event", "notification", "webhook"]
-      },
-      {
-        "name": "Sync & Background Tasks",
-        "classes": ["SynchroDataSource", "SynchroReplica", "SynchroAttribute", "SynchroAttExtKey", "SynchroAttLinkSet", "SynchroLog", "AsyncTask", "AsyncSendEmail", "BackgroundTask", "BulkExportResult"],
-        "description": "External sync, jobs, and export results",
-        "keywords": ["sync", "background", "task", "export", "async"]
       }
     ],
     "SecurityAndUI": [
       {
         "name": "Users & Profiles",
-        "classes": ["User", "UserLocal", "UserExternal", "UserInternal", "UserLDAP", "UserToken", "PersonalToken", "URP_Profiles", "URP_UserOrg", "URP_UserProfile"],
+        "classes": ["User", "UserLocal", "UserExternal"],
         "description": "Authentication and user metadata",
-        "keywords": ["user", "users", "profile", "profiles", "authentication", "token", "ldap", "urp"]
-      },
-      {
-        "name": "UI Dashboard / Extensions",
-        "classes": ["ModuleInstallation", "ExtensionInstallation", "UserDashboard", "Shortcut", "ShortcutOQL", "Query", "QueryOQL"],
-        "description": "Modules, UI elements, and query definitions",
-        "keywords": ["dashboard", "shortcut", "query", "module", "extension"]
-      }
-    ],
-    "StorageAndDocuments": [
-      {
-        "name": "Documents & Attachments",
-        "classes": ["Document", "DocumentFile", "DocumentNote", "DocumentWeb", "Attachment"],
-        "description": "Stored documents and attachments",
-        "keywords": ["document", "documents", "attachment", "attachments", "file", "files"]
-      },
-      {
-        "name": "Storage Config",
-        "classes": ["KeyValueStore", "DBProperty", "TemporaryObjectDescriptor"],
-        "description": "System storage and config entries",
-        "keywords": ["key", "store", "config", "dbproperty", "temporary"]
-      }
-    ],
-    "InfrastructureMisc": [
-      {
-        "name": "Misc Infrastructure Tools",
-        "classes": ["Typology", "Brand", "ContactType", "ContractType", "DocumentType", "IOSVersion", "Model", "OCSAssetCategory", "OCSSoftwareCategory", "OSFamily", "OSVersion", "RemoteApplicationType", "RemoteiTopConnectionToken", "RemoteApplicationConnection", "RemoteiTopConnection", "WebApplication", "DeliveryModel", "NAS", "StorageSystem", "SoftwareLicence", "Licence", "OSLicence", "CustomerContract", "ProviderContract", "ServiceFamily", "ServiceSubcategory", "Tape", "NASFileSystem", "LogicalVolume"],
-        "description": "Various infra/categorization/config classes",
-        "keywords": ["typology", "brand", "model", "license", "contract", "nas", "filesystem", "delivery", "webapp"]
+        "keywords": ["user", "users", "profile", "profiles", "authentication"]
       }
     ]
-  }
-# Cache for discovered class fields
-_CLASS_FIELDS_CACHE = {}
-
-async def discover_class_fields(class_name: str) -> dict:
-    """
-    Dynamically discover all available fields for a given iTop class.
-    Returns ONLY the raw field names and sample values - NO HARDCODED CATEGORIZATION.
-    Uses caching to avoid repeated API calls.
-    """
-    if class_name in _CLASS_FIELDS_CACHE:
-        return _CLASS_FIELDS_CACHE[class_name]
-    
-    try:
-        client = get_itop_client()
-        
-        # Get one object with all fields to discover the schema
-        operation_data = {
-            "operation": "core/get",
-            "class": class_name,
-            "key": f"SELECT {class_name}",
-            "output_fields": "*",
-            "limit": 1
-        }
-        
-        result = await client.make_request(operation_data)
-        
-        if result.get("code") == 0 and result.get("objects"):
-            # Extract field schema from the first object
-            first_obj = next(iter(result["objects"].values()))
-            if first_obj.get("code") == 0:
-                fields = first_obj.get("fields", {})
-                
-                # Store ONLY raw field discovery - let AI decide what to display
-                field_schema = {
-                    "field_names": list(fields.keys()),
-                    "sample_values": {k: str(v)[:100] if v else "" for k, v in fields.items()},
-                    "total_fields": len(fields),
-                    "key_fields": _identify_key_fields(fields),
-                    "display_fields": _identify_display_fields(fields)
-                }
-                
-                _CLASS_FIELDS_CACHE[class_name] = field_schema
-                return field_schema
-    
-    except Exception as e:
-        # Return empty schema if discovery fails
-        return {
-            "field_names": [],
-            "sample_values": {},
-            "total_fields": 0,
-            "key_fields": [],
-            "display_fields": []
-        }
-    
-    return _CLASS_FIELDS_CACHE.get(class_name, {})
-
-
-def _identify_key_fields(fields: dict) -> list:
-    """Identify the most important fields for summary display"""
-    priority_indicators = [
-        "name", "friendlyname", "title", "status", "id", "ref", 
-        "description", "organization_name", "org_name", "caller_name"
-    ]
-    
-    key_fields = []
-    for indicator in priority_indicators:
-        if indicator in fields and fields[indicator]:
-            key_fields.append(indicator)
-    
-    return key_fields[:5]  # Top 5 key fields
-
-
-def _identify_display_fields(fields: dict) -> list:
-    """Identify the best fields for table/summary display"""
-    # Skip very long text fields, internal IDs, and empty fields
-    skip_patterns = ["_id", "_list", "html", "description", "solution", "log"]
-    
-    display_fields = []
-    for field_name, field_value in fields.items():
-        if (field_value and 
-            not any(pattern in field_name.lower() for pattern in skip_patterns) and
-            len(str(field_value)) < 200):  # Skip very long values
-            display_fields.append(field_name)
-    
-    return display_fields[:8]  # Top 8 display fields
+}
 
 def smart_class_detection(query: str) -> tuple[str, float, dict]:
     """
+    Enhanced class detection with priority handling
     Returns:
         tuple: (best_class_name, confidence_score, query_analysis)
     """
     query_lower = query.lower()
     best_matches = []
     
-    # SPECIAL CASE 1: Change requests should use Change class (CHECK FIRST!)
-    change_patterns = ["change request", "change requests"]
-    for pattern in change_patterns:
-        if pattern in query_lower:
-            return "Change", 0.95, {"action": "list", "time_analysis": True}
+    # PRIORITY 1: Handle entity + relationship queries (give precedence to main entity)
+    # "network devices and their location" should route to NetworkDevice, not Location
+    if "network device" in query_lower and "location" in query_lower:
+        return "NetworkDevice", 0.95, {"action": "list", "include_relationships": True}
     
-    # SPECIAL CASE 2: SLA/support ticket queries should use UserRequest  
+    # "software applications installed on server" should route to Server, not Software  
+    if ("software" in query_lower or "application" in query_lower) and "server" in query_lower:
+        return "Server", 0.95, {"action": "list", "include_relationships": True}
+    
+    # PRIORITY 2: SLA/support ticket queries should use UserRequest  
     sla_patterns = ["sla", "support ticket", "support tickets", "sla issues", "with sla"]
     for pattern in sla_patterns:
         if pattern in query_lower and "change" not in query_lower:
             # Force UserRequest for SLA queries (but not for change requests)
             return "UserRequest", 0.95, {"action": "list", "time_analysis": True}
     
-    # Search through all categories and classes
+    # PRIORITY 3: Team assignment queries - Use UserRequest for most team-based ticket queries
+    if "team" in query_lower and any(ticket_word in query_lower for ticket_word in ["ticket", "tickets", "user request", "support", "assigned"]):
+        # Most team-related ticket queries should use UserRequest for better compatibility
+        return "UserRequest", 0.90, {"action": "list", "team_filter": True}
+    
+    # PRIORITY 4: Contact vs Person disambiguation for service managers
+    if "contact" in query_lower and "service manager" in query_lower:
+        return "Contact", 0.95, {"action": "list", "role_filter": True}
+    
+    # PRIORITY 5: Standard taxonomy-based detection
     for category_list in ITOP_CLASS_TAXONOMY.values():
         for category in category_list:
             for class_name in category["classes"]:
                 score = 0
                 
-                # Direct class name match (high score)
+                # Higher score for exact class name matches
                 if class_name.lower() in query_lower:
-                    score += 50
+                    score += 60
                 
-                # Keyword matching
+                # Score for keyword matches
                 for keyword in category.get("keywords", []):
                     if keyword in query_lower:
-                        score += len(keyword.split()) * 10  # Multi-word keywords get higher scores
+                        # Multi-word keywords get higher scores
+                        word_count = len(keyword.split())
+                        score += word_count * 15
+                        
+                        # Bonus for exact phrase matches
+                        if keyword == query_lower.strip():
+                            score += 30
                 
-                # Pattern matching for specific query types
                 if score > 0:
                     best_matches.append((class_name, score, category))
     
-    # Sort by score and return the best match
     best_matches.sort(key=lambda x: x[1], reverse=True)
     
     if best_matches:
         best_class, best_score, best_category = best_matches[0]
         
-        # Analyze query for additional parameters
-        query_analysis = analyze_query_intent(query, best_class)
-        
         # Normalize confidence score (0-1)
         confidence = min(best_score / 100.0, 1.0)
         
-        return best_class, confidence, query_analysis
+        return best_class, confidence, {"action": "list", "category": best_category["name"]}
     
     # Default fallback
-    return "UserRequest", 0.1, {"action": "list", "filters": []}
+    return "UserRequest", 0.1, {"action": "list", "fallback": True}
 
-def analyze_query_intent_with_schema(query: str, class_name: str, class_fields: dict) -> dict:
-    """
-    Analyze the query to extract intent, filters, and desired actions using actual schema knowledge.
-    This is the NEW improved version that uses discovered fields for better mapping.
-    """
-    query_lower = query.lower()
-    available_fields = class_fields.get("field_names", [])
-    
-    analysis = {
-        "action": "list",  # Default action
-        "raw_filters": [],  # Raw filter terms to be mapped dynamically
-        "requested_fields": [],  # Fields specifically requested in the query
-        "grouping": None,
-        "sorting": None,
-        "format_preference": "detailed",
-        "time_analysis": False,
-        "comparison": False,
-        "discovered_filters": []  # NEW: Pre-mapped filters using schema
-    }
-    
-    # Detect action type (same as before)
-    if any(word in query_lower for word in ["count", "how many", "number of"]):
-        analysis["action"] = "count"
-        analysis["format_preference"] = "summary"
-    elif any(word in query_lower for word in ["compare", "vs", "versus", "compared to"]):
-        analysis["action"] = "compare"
-        analysis["comparison"] = True
-        analysis["format_preference"] = "table"
-        
-        # Detect multi-query patterns like "closed vs open", "active vs inactive"
-        if " vs " in query_lower or " versus " in query_lower:
-            vs_parts = query_lower.replace(" versus ", " vs ").split(" vs ")
-            if len(vs_parts) == 2:
-                analysis["comparison_values"] = [vs_parts[0].strip().split()[-1], vs_parts[1].strip().split()[0]]
-                analysis["needs_multi_query"] = True
-    elif any(word in query_lower for word in ["stats", "statistics", "breakdown", "summary", "based stats", "by status", "group by"]):
-        analysis["action"] = "statistics"
-        analysis["format_preference"] = "table"
-    elif any(word in query_lower for word in ["list", "show", "get", "find"]):
-        analysis["action"] = "list"
-    
-    # NEW: Smart field-aware filtering using discovered schema
-    discovered_filters = extract_filters_with_schema(query_lower, available_fields)
-    analysis["discovered_filters"] = discovered_filters
-    
-    # Also keep the old system for backward compatibility
-    raw_filters = extract_filter_terms_from_query(query_lower)
-    analysis["raw_filters"] = raw_filters
-    
-    # Detect grouping with schema awareness
-    if "by" in query_lower:
-        parts = query_lower.split("by")
-        if len(parts) > 1:
-            group_part = parts[-1].strip()
-            group_words = group_part.split()
-            if group_words:
-                # Try to find actual field that matches grouping intent
-                potential_group_field = find_semantically_similar_field(group_words[0], class_fields.get("field_names", []))
-                analysis["grouping"] = potential_group_field or group_words[0]
-    elif "based" in query_lower and "stats" in query_lower:
-        # Handle "status based stats" type queries
-        if "status" in query_lower:
-            status_fields = [f for f in available_fields if "status" in f.lower()]
-            if status_fields:
-                analysis["grouping"] = status_fields[0]  # Use first status field found
-    
-    # Detect time-based analysis with schema awareness
-    if any(word in query_lower for word in ["on time", "late", "overdue", "sla", "deadline"]):
-        analysis["time_analysis"] = True
-        # Look for actual SLA-related fields in the schema
-        sla_fields = [f for f in available_fields if any(sla_term in f.lower() for sla_term in ["sla", "deadline", "due", "timeout"])]
-        if sla_fields:
-            analysis["sla_fields"] = sla_fields
-    
-    return analysis
-
-def extract_filters_with_schema(query_lower: str, available_fields: list) -> list:
-    """
-    NEW: Extract filters using actual schema knowledge for much better accuracy.
-    Now also detects comparison patterns like "closed vs open".
-    """
-    filters = []
-    
-    # Detect comparison patterns first (e.g., "closed vs open", "ongoing vs resolved")
-    comparison_patterns = [
-        r'\b(\w+)\s+vs\s+(\w+)\b',
-        r'\b(\w+)\s+versus\s+(\w+)\b',
-        r'\b(\w+)\s+compared?\s+to\s+(\w+)\b'
-    ]
-    
-    comparison_values = []
-    for pattern in comparison_patterns:
-        matches = re.findall(pattern, query_lower)
-        for match in matches:
-            comparison_values.extend(match)
-    
-    if comparison_values:
-        print(f"🔍 Detected comparison values: {comparison_values}")
-        
-        # Find the best field for these comparison values
-        status_fields = [f for f in available_fields if "status" in f.lower() or "state" in f.lower()]
-        best_field = status_fields[0] if status_fields else "status"
-        
-        # Create filters for each comparison value
-        for value in comparison_values:
-            filters.append({
-                "field": best_field,
-                "operator": "=",
-                "value": value,
-                "confidence": "medium",
-                "source": "comparison_detection",
-                "is_comparison_value": True,  # Mark as comparison value for multi-query
-                "needs_value_discovery": True,
-                "assume_value": False
-            })
-    
-    # Status filtering - find actual status fields
-    status_fields = [f for f in available_fields if "status" in f.lower() or "state" in f.lower()]
-    status_terms = ["new", "assigned", "pending", "resolved", "closed", "open", "ongoing", "active", "inactive", "production", "obsolete"]
-    
-    # Skip status terms if they're already handled by comparison detection
-    handled_terms = set(comparison_values)
-    
-    for term in status_terms:
-        if term in query_lower and term not in handled_terms and status_fields:
-            # DON'T assume the value exists - just mark the field for discovery
-            filters.append({
-                "field": status_fields[0],  # Use the first/best status field
-                "operator": "=",
-                "value": term,
-                "confidence": "low",  # Very low confidence since we haven't verified the value exists
-                "source": "schema_aware",
-                "needs_value_discovery": True,  # MUST discover actual values first
-                "assume_value": False  # Don't use this filter until values are discovered
-            })
-    
-    # OS filtering - find actual OS fields
-    os_fields = [f for f in available_fields if any(os_term in f.lower() for os_term in ["os", "operating", "system", "platform", "osfamily", "osversion"])]
-    os_terms = ["linux", "windows", "ubuntu", "centos", "redhat", "debian", "fedora", "macos"]
-    
-    for term in os_terms:
-        if term in query_lower and os_fields:
-            # Prefer family fields for OS family terms
-            family_fields = [f for f in os_fields if "family" in f.lower()]
-            best_field = family_fields[0] if family_fields else os_fields[0]
-            filters.append({
-                "field": best_field,
-                "operator": "LIKE",
-                "value": f"%{term}%",
-                "confidence": "high",
-                "source": "schema_aware"
-            })
-    
-    # Memory/RAM filtering - find actual memory fields
-    memory_fields = [f for f in available_fields if any(mem_term in f.lower() for mem_term in ["ram", "memory", "mem"])]
-    ram_pattern = r'(\d+)\s*(gb|mb)\s*(ram|memory)'
-    ram_match = re.search(ram_pattern, query_lower)
-    if ram_match and memory_fields:
-        amount = int(ram_match.group(1))
-        unit = ram_match.group(2)
-        amount_mb = amount * 1024 if unit == "gb" else amount
-        
-        operator = ">"
-        if "less than" in query_lower or "under" in query_lower or "below" in query_lower:
-            operator = "<"
-        elif "at least" in query_lower:
-            operator = ">="
-        elif "at most" in query_lower:
-            operator = "<="
-            
-        filters.append({
-            "field": memory_fields[0],
-            "operator": operator,
-            "value": amount_mb,
-            "confidence": "high",
-            "source": "schema_aware"
-        })
-    
-    # Organization/Team/Service filtering - find relationship fields
-    relationship_terms = {
-        "organization": ["org", "company", "organization"],
-        "team": ["team", "group"],
-        "service": ["service", "application", "app"],
-        "caller": ["caller", "user", "person"],
-        "agent": ["agent", "assignee", "owner"]
-    }
-    
-    for rel_type, rel_keywords in relationship_terms.items():
-        rel_fields = [f for f in available_fields if any(keyword in f.lower() for keyword in rel_keywords)]
-        if rel_fields:
-            # Look for mentions of specific names after these keywords
-            for keyword in rel_keywords:
-                if keyword in query_lower:
-                    # Extract potential names after the keyword
-                    parts = query_lower.split(keyword)
-                    if len(parts) > 1:
-                        after_keyword = parts[1].strip()
-                        words = after_keyword.split()
-                        if words and len(words[0]) > 2:  # Reasonable name length
-                            name_field = None
-                            id_field = None
-                            for field in rel_fields:
-                                if field.endswith("_name"):
-                                    name_field = field
-                                elif field.endswith("_id"):
-                                    id_field = field
-                            
-                            best_field = name_field or id_field or rel_fields[0]
-                            filters.append({
-                                "field": best_field,
-                                "operator": "LIKE",
-                                "value": f"%{words[0]}%",
-                                "confidence": "medium",
-                                "source": "schema_aware"
-                            })
-    
-    return filters
-
-def analyze_query_intent(query: str, class_name: str) -> dict:
-    """
-    Analyze the query to extract intent, filters, and desired actions.
-    This function now extracts raw filter terms without hardcoded field mappings.
-    """
-    query_lower = query.lower()
-    analysis = {
-        "action": "list",  # Default action
-        "raw_filters": [],  # Raw filter terms to be mapped dynamically
-        "requested_fields": [],  # Fields specifically requested in the query
-        "grouping": None,
-        "sorting": None,
-        "format_preference": "detailed",
-        "time_analysis": False,
-        "comparison": False
-    }
-    
-    # Detect action type
-    if any(word in query_lower for word in ["count", "how many", "number of"]):
-        analysis["action"] = "count"
-        analysis["format_preference"] = "summary"
-    elif any(word in query_lower for word in ["compare", "vs", "versus", "compared to"]):
-        analysis["action"] = "compare"
-        analysis["comparison"] = True
-        analysis["format_preference"] = "table"
-    elif any(word in query_lower for word in ["stats", "statistics", "breakdown", "summary"]):
-        analysis["action"] = "statistics"
-        analysis["format_preference"] = "table"
-    elif any(word in query_lower for word in ["list", "show", "get", "find"]):
-        analysis["action"] = "list"
-    
-    # Extract raw filter terms from the query
-    raw_filters = extract_filter_terms_from_query(query_lower)
-    analysis["raw_filters"] = raw_filters
-    
-    # Detect grouping
-    if "by" in query_lower:
-        # Extract what to group by
-        parts = query_lower.split("by")
-        if len(parts) > 1:
-            group_part = parts[-1].strip()
-            # Extract the first meaningful word after "by"
-            group_words = group_part.split()
-            if group_words:
-                analysis["grouping"] = group_words[0]
-    
-    # Detect time-based analysis
-    if any(word in query_lower for word in ["on time", "late", "overdue", "sla", "deadline"]):
-        analysis["time_analysis"] = True
-    
-    return analysis
-
-def extract_filter_terms_from_query(query_lower: str) -> list:
-    """
-    Extract filter terms from natural language query.
-    Returns a list of dictionaries with filter information.
-    """
-    filters = []
-    
-    # Status-related terms
-    status_terms = {
-        "new": {"term": "new", "category": "status"},
-        "assigned": {"term": "assigned", "category": "status"},
-        "pending": {"term": "pending", "category": "status"},
-        "resolved": {"term": "resolved", "category": "status"},
-        "closed": {"term": "closed", "category": "status"},
-        "open": {"term": "open", "category": "status"},
-        "ongoing": {"term": "ongoing", "category": "status"},
-        "active": {"term": "active", "category": "status"},
-        "inactive": {"term": "inactive", "category": "status"},
-        "production": {"term": "production", "category": "status"},
-        "obsolete": {"term": "obsolete", "category": "status"}
-    }
-    
-    # OS-related terms
-    os_terms = {
-        "linux": {"term": "linux", "category": "os"},
-        "windows": {"term": "windows", "category": "os"},
-        "ubuntu": {"term": "ubuntu", "category": "os"},
-        "centos": {"term": "centos", "category": "os"},
-        "redhat": {"term": "redhat", "category": "os"}
-    }
-    
-    # Priority/urgency terms
-    priority_terms = {
-        "high": {"term": "high", "category": "priority"},
-        "medium": {"term": "medium", "category": "priority"},
-        "low": {"term": "low", "category": "priority"},
-        "urgent": {"term": "urgent", "category": "priority"},
-        "critical": {"term": "critical", "category": "priority"}
-    }
-    
-    # Null/empty checks
-    null_terms = ["null", "empty", "without", "missing", "no ", "blank"]
-    
-    # Check for status terms
-    for term, info in status_terms.items():
-        if term in query_lower:
-            filters.append({
-                "search_term": term,
-                "category": info["category"],
-                "operator": "=",
-                "value": info["term"]
-            })
-    
-    # Check for OS terms
-    for term, info in os_terms.items():
-        if term in query_lower:
-            filters.append({
-                "search_term": term,
-                "category": info["category"],
-                "operator": "LIKE",
-                "value": f"%{info['term']}%"
-            })
-    
-    # Check for priority terms
-    for term, info in priority_terms.items():
-        if term in query_lower:
-            filters.append({
-                "search_term": term,
-                "category": info["category"],
-                "operator": "=",
-                "value": info["term"]
-            })
-    
-    # Check for RAM/Memory constraints
-    import re
-    ram_pattern = r'(\d+)\s*(gb|mb)\s*(ram|memory)'
-    ram_match = re.search(ram_pattern, query_lower)
-    if ram_match:
-        amount = int(ram_match.group(1))
-        unit = ram_match.group(2)
-        # Convert to MB for consistency
-        if unit == "gb":
-            amount_mb = amount * 1024
-        else:
-            amount_mb = amount
-            
-        # Determine operator based on context
-        operator = "<"
-        if "more than" in query_lower or "greater than" in query_lower or "above" in query_lower:
-            operator = ">"
-        elif "less than" in query_lower or "under" in query_lower or "below" in query_lower:
-            operator = "<"
-        elif "at least" in query_lower:
-            operator = ">="
-        elif "at most" in query_lower:
-            operator = "<="
-            
-        filters.append({
-            "search_term": f"{ram_match.group(1)} {unit}",
-            "category": "memory",
-            "operator": operator,
-            "value": amount_mb
-        })
-    
-    # Check for null/empty field queries
-    for null_term in null_terms:
-        if null_term in query_lower:
-            # Try to identify what field should be null
-            context_words = query_lower.split()
-            null_index = -1
-            for i, word in enumerate(context_words):
-                if null_term in word:
-                    null_index = i
-                    break
-            
-            if null_index >= 0:
-                # Look for field indicators nearby
-                search_range = context_words[max(0, null_index-2):min(len(context_words), null_index+3)]
-                field_indicators = ["service", "category", "organization", "team", "agent", "caller"]
-                
-                for indicator in field_indicators:
-                    if indicator in " ".join(search_range):
-                        filters.append({
-                            "search_term": f"{null_term} {indicator}",
-                            "category": indicator,
-                            "operator": "IS NULL",
-                            "value": None
-                        })
-                        break
-    
-    return filters
-
-
-
-async def map_filter_to_field(filter_info: dict, class_fields: dict) -> dict:
-    """
-    Use dynamic field mapping to find the best field match for a filter term.
-    Uses only dynamically discovered fields without hardcoded categorization.
-    """
-    search_term = filter_info["search_term"]
-    category = filter_info["category"]
-    operator = filter_info["operator"]
-    value = filter_info["value"]
-    
-    available_fields = class_fields.get("field_names", [])
-    if not available_fields:
-        return None
-    
-    # Dynamic field mapping logic - no hardcoded categories
-    best_field = None
-    
-    if category == "status":
-        # Look for fields containing "status" or "state"
-        for field in available_fields:
-            field_lower = field.lower()
-            if "status" in field_lower or "state" in field_lower:
-                best_field = field
-                break
-    
-    elif category == "os":
-        # Look for OS-related fields
-        os_candidates = []
-        for field in available_fields:
-            field_lower = field.lower()
-            if any(term in field_lower for term in ["os", "operating", "system", "platform", "osfamily", "osversion"]):
-                os_candidates.append(field)
-        
-        # Prefer osfamily_name for OS family terms, then other OS fields
-        if os_candidates:
-            family_fields = [f for f in os_candidates if "family" in f.lower()]
-            if family_fields:
-                best_field = family_fields[0]
-            else:
-                best_field = min(os_candidates, key=len)
-    
-    elif category == "memory":
-        # Look for memory/RAM-related fields
-        memory_candidates = []
-        for field in available_fields:
-            field_lower = field.lower()
-            if any(term in field_lower for term in ["ram", "memory", "mem"]):
-                memory_candidates.append(field)
-        
-        if memory_candidates:
-            best_field = min(memory_candidates, key=len)
-    
-    elif category == "priority":
-        # Look for priority/urgency fields
-        priority_candidates = []
-        for field in available_fields:
-            field_lower = field.lower()
-            if any(term in field_lower for term in ["priority", "urgency"]):
-                priority_candidates.append(field)
-        
-        if priority_candidates:
-            best_field = min(priority_candidates, key=len)
-    
-    elif category in ["service", "organization", "team", "agent", "caller", "category"]:
-        # Look for relationship fields
-        relationship_candidates = []
-        for field in available_fields:
-            field_lower = field.lower()
-            # Look for exact match first
-            if category in field_lower:
-                relationship_candidates.append(field)
-            # Also look for ID versions
-            elif f"{category}_id" in field_lower:
-                relationship_candidates.append(field)
-        
-        if relationship_candidates:
-            # Prefer ID fields for relationships when doing NULL checks
-            if operator == "IS NULL":
-                id_fields = [f for f in relationship_candidates if "_id" in f.lower()]
-                if id_fields:
-                    best_field = id_fields[0]
-                else:
-                    best_field = relationship_candidates[0]
-            else:
-                best_field = relationship_candidates[0]
-    
-    # If no specific mapping found, try semantic similarity
-    if not best_field:
-        best_field = find_semantically_similar_field(search_term, available_fields)
-    
-    if best_field:
-        return {
-            "field": best_field,
-            "operator": operator,
-            "value": value,
-            "original_term": search_term
-        }
-    
-    return None
-
-def find_semantically_similar_field(search_term: str, available_fields: list) -> str:
-    """
-    Find the most semantically similar field name for a search term.
-    Uses simple string similarity and common patterns.
-    """
-    if not available_fields:
-        return None
-    
-    search_lower = search_term.lower()
-    best_field = None
-    best_score = 0
-    
-    for field in available_fields:
-        field_lower = field.lower()
-        score = 0
-        
-        # Exact substring match gets high score
-        if search_lower in field_lower:
-            score += 50
-        
-        # Partial word matches
-        search_words = search_lower.split()
-        field_words = field_lower.replace("_", " ").split()
-        
-        for search_word in search_words:
-            for field_word in field_words:
-                if search_word == field_word:
-                    score += 20
-                elif search_word in field_word or field_word in search_lower:
-                    score += 10
-        
-        # Bonus for common field patterns
-        if field_lower.endswith("_name") or field_lower.endswith("_id"):
-            score += 5
-        
-        if score > best_score:
-            best_score = score
-            best_field = field
-    
-    return best_field if best_score > 0 else None
-
-async def build_smart_oql_query(class_name: str, query_analysis: dict, class_fields: dict) -> tuple[str, dict]:
-    """
-    Build an OQL query based on the analysis and available fields.
-    NOW uses schema-aware filters for much better accuracy.
-    
-    Returns:
-        tuple: (oql_query, validation_info)
-        - oql_query: The built OQL query string
-        - validation_info: Dict with validation status and multi-query needs
-    """
-    base_query = f"SELECT {class_name}"
-    conditions = []
-    validation_info = {
-        "has_unvalidated_filters": False,
-        "needs_multi_query": False,
-        "comparison_values": [],
-        "skipped_filters": []
-    }
-    
-    # Detect comparison queries that need multi-query execution
-    comparison_values = []
-    for filter_info in query_analysis.get("discovered_filters", []):
-        if filter_info.get("is_comparison_value", False):
-            comparison_values.append(filter_info["value"])
-    
-    if len(comparison_values) > 1:
-        validation_info["needs_multi_query"] = True
-        validation_info["comparison_values"] = comparison_values
-        print(f"🔄 Detected multi-query need for comparison: {comparison_values}")
-        # For multi-query, return base query without comparison filters
-        # The caller will handle running separate queries for each value
-        non_comparison_filters = [f for f in query_analysis.get("discovered_filters", []) 
-                                 if not f.get("is_comparison_value", False)]
-        query_analysis["discovered_filters"] = non_comparison_filters
-    
-    # Process NEW schema-aware filters first (higher priority) - BUT ONLY VALIDATED ONES
-    for filter_info in query_analysis.get("discovered_filters", []):
-        field = filter_info["field"]
-        operator = filter_info["operator"]
-        value = filter_info["value"]
-        assume_value = filter_info.get("assume_value", True)  # Default to True for backward compatibility
-        
-        # CRITICAL: Only apply filters if values have been validated OR explicitly allowed
-        if not assume_value:
-            print(f"⚠️ Skipping unvalidated filter: {field} = '{value}' (needs value discovery)")
-            validation_info["has_unvalidated_filters"] = True
-            validation_info["skipped_filters"].append({
-                "field": field,
-                "operator": operator,
-                "value": value,
-                "reason": "unvalidated"
-            })
-            continue
-        
-        if operator == "IS NULL":
-            if field.endswith("_id") or field.lower() in ["service_id", "organization_id", "team_id"]:
-                conditions.append(f"({field} = '' OR {field} = 0)")
-            else:
-                conditions.append(f"{field} = ''")
-        elif operator == "LIKE":
-            conditions.append(f"{field} LIKE '{value}'")
-        elif operator in ["<", ">", "<=", ">="]:
-            conditions.append(f"{field} {operator} {value}")
-        else:
-            conditions.append(f"{field} = '{value}'")
-    
-    # Fallback to old system for unmapped filters
-    mapped_filters = []
-    for raw_filter in query_analysis.get("raw_filters", []):
-        mapped_filter = await map_filter_to_field(raw_filter, class_fields)
-        if mapped_filter:
-            mapped_filters.append(mapped_filter)
-    
-    # Build conditions from fallback mapped filters (only if not already covered)
-    existing_fields = {f["field"] for f in query_analysis.get("discovered_filters", [])}
-    for mapped_filter in mapped_filters:
-        field = mapped_filter["field"]
-        if field in existing_fields:
-            continue  # Skip if already handled by schema-aware filters
-            
-        operator = mapped_filter["operator"]
-        value = mapped_filter["value"]
-        
-        if operator == "IS NULL":
-            if field.endswith("_id") or field.lower() in ["service_id", "organization_id", "team_id"]:
-                conditions.append(f"({field} = '' OR {field} = 0)")
-            else:
-                conditions.append(f"{field} = ''")
-        elif operator == "LIKE":
-            conditions.append(f"{field} LIKE '{value}'")
-        elif operator in ["<", ">", "<=", ">="]:
-            conditions.append(f"{field} {operator} {value}")
-        else:
-            conditions.append(f"{field} = '{value}'")
-    
-    # Handle special time analysis with schema awareness - IMPROVED
-    if query_analysis.get("time_analysis"):
-        sla_fields = query_analysis.get("sla_fields", [])
-        if sla_fields:
-            sla_focus = query_analysis.get("sla_focus", "all")
-            
-            # Better SLA field selection and condition building
-            if sla_focus == "violations":
-                # Look for SLA violation indicators
-                sla_violation_fields = [f for f in sla_fields if any(term in f.lower() for term in 
-                                                                  ["passed", "violated", "breach", "missed"])]
-                
-                if sla_violation_fields:
-                    # First preference: status field like sla_passed, sla_violated, etc.
-                    conditions.append(f"{sla_violation_fields[0]} = 'yes'")
-                elif any("deadline" in f.lower() for f in sla_fields):
-                    # Second preference: deadline field for date comparison
-                    deadline_field = next(f for f in sla_fields if "deadline" in f.lower())
-                    conditions.append(f"{deadline_field} < NOW()")
-                elif any("sla" in f.lower() and "status" in f.lower() for f in sla_fields):
-                    # Third preference: status field
-                    status_field = next(f for f in sla_fields if "sla" in f.lower() and "status" in f.lower())
-                    conditions.append(f"{status_field} = 'breached'")
-            
-            elif sla_focus == "compliant":
-                # Look for SLA compliance indicators
-                sla_violation_fields = [f for f in sla_fields if any(term in f.lower() for term in 
-                                                                  ["passed", "violated", "breach", "missed"])]
-                
-                if sla_violation_fields:
-                    # First preference: status field showing NOT violated
-                    conditions.append(f"{sla_violation_fields[0]} = 'no'")
-                elif any("deadline" in f.lower() for f in sla_fields):
-                    # Second preference: deadline in future
-                    deadline_field = next(f for f in sla_fields if "deadline" in f.lower())
-                    conditions.append(f"{deadline_field} > NOW()")
-                elif any("sla" in f.lower() and "status" in f.lower() for f in sla_fields):
-                    # Third preference: status field
-                    status_field = next(f for f in sla_fields if "sla" in f.lower() and "status" in f.lower())
-                    conditions.append(f"{status_field} = 'within'")
-            else:
-                # Default when no specific focus - just look for any SLA fields without conditions
-                # This will return all records with SLA data
-                pass
-    
-    # Build final query
-    if conditions:
-        base_query += " WHERE " + " AND ".join(conditions)
-    
-    return base_query, validation_info
-
-def determine_smart_output_fields(query_analysis: dict, class_fields: dict, output_format: str) -> str:
-    """
-    SMART OUTPUT FIELD SELECTION
-    
-    Determines the optimal output fields based on:
-    - Query intent and action type
-    - Discovered schema and available fields
-    - Requested output format
-    - SLA/status/grouping requirements
-    """
-    available_fields = class_fields.get("field_names", [])
-    key_fields = class_fields.get("key_fields", ["id", "name"])
-    display_fields = class_fields.get("display_fields", [])
-    
-    # For count queries - if grouping is needed, include the grouping field
-    if query_analysis.get("action") == "count":
-        if query_analysis.get("grouping"):
-            grouping_field = query_analysis["grouping"]
-            # Map grouping field to actual field name if needed
-            actual_grouping_field = find_semantically_similar_field(grouping_field, available_fields)
-            if actual_grouping_field:
-                return f"id,{actual_grouping_field}"
-            else:
-                return f"id,{grouping_field}"
-        else:
-            return "id"  # Simple count, minimal fields needed
-    
-    # For statistics/breakdown queries - need relevant fields for analysis
-    if query_analysis.get("action") in ["statistics", "compare"]:
-        needed_fields = set(["id"])
-        
-        # Add status-related fields
-        status_fields = [f for f in available_fields if any(term in f.lower() for term in ["status", "state"])]
-        needed_fields.update(status_fields[:2])  # Top 2 status fields
-        
-        # Add grouping field if specified
-        if query_analysis.get("grouping"):
-            grouping_field = find_semantically_similar_field(query_analysis["grouping"], available_fields)
-            if grouping_field:
-                needed_fields.add(grouping_field)
-        
-        # Add SLA/time fields for SLA-related queries
-        if query_analysis.get("time_analysis"):
-            sla_fields = [f for f in available_fields if any(term in f.lower() for term in ["sla", "deadline", "due", "timeout", "resolution"])]
-            needed_fields.update(sla_fields[:3])  # Top 3 SLA fields
-        
-        # Add key display fields
-        needed_fields.update(key_fields[:3])
-        
-        return ",".join(sorted(needed_fields))
-    
-    # For summary format - use key fields plus any fields mentioned in filters
-    if output_format == "summary":
-        needed_fields = set(key_fields)
-        
-        # Add fields from discovered filters
-        for filter_info in query_analysis.get("discovered_filters", []):
-            field = filter_info.get("field")
-            if field and field in available_fields:
-                needed_fields.add(field)
-        
-        return ",".join(sorted(needed_fields)) if needed_fields else "*"
-    
-    # For table format - use display fields plus filter fields
-    if output_format == "table":
-        needed_fields = set(display_fields[:8])  # Top 8 display fields
-        
-        # Add fields from discovered filters
-        for filter_info in query_analysis.get("discovered_filters", []):
-            field = filter_info.get("field")
-            if field and field in available_fields:
-                needed_fields.add(field)
-        
-        return ",".join(sorted(needed_fields)) if needed_fields else "*"
-    
-    # For detailed view - get ALL fields for maximum information
-    return "*"
-
-
-async def handle_multi_class_query(query: str, query_analysis: dict) -> str:
-    """
-    Handle queries that need data from multiple classes like "network devices with their locations"
-    """
-    query_lower = query.lower()
-    
-    # Pattern: "X with their Y" or "X and their Y"
-    if any(pattern in query_lower for pattern in ["with their", "and their", "with location", "and location"]):
-        
-        # Network devices with locations
-        if any(term in query_lower for term in ["network device", "network devices"]):
-            if any(term in query_lower for term in ["location", "locations"]):
-                return await query_network_devices_with_locations()
-        
-        # TODO: Add more multi-class patterns later
-        # - Servers with applications
-        # - Users with tickets
-    
-    return None  # Not a multi-class query
-
-async def query_network_devices_with_locations() -> str:
-    """Query network devices and their locations using proper field relationships"""
-    try:
-        client = get_itop_client()
-        
-        # First get all network devices
-        devices_op = {
-            "operation": "core/get",
-            "class": "NetworkDevice",
-            "key": "SELECT NetworkDevice",
-            "output_fields": "*",
-            "limit": 100
-        }
-        
-        devices_result = await client.make_request(devices_op)
-        
-        if devices_result.get("code") != 0:
-            return f"❌ Error getting network devices: {devices_result.get('message')}"
-        
-        devices = devices_result.get("objects", {})
-        if not devices:
-            return "No network devices found."
-        
-        # Get all locations for reference
-        locations_op = {
-            "operation": "core/get", 
-            "class": "Location",
-            "key": "SELECT Location",
-            "output_fields": "*",
-            "limit": 100
-        }
-        
-        locations_result = await client.make_request(locations_op)
-        locations = {}
-        
-        if locations_result.get("code") == 0:
-            for loc_key, loc_data in locations_result.get("objects", {}).items():
-                if loc_data.get("code") == 0:
-                    loc_fields = loc_data.get("fields", {})
-                    loc_id = loc_fields.get("id")
-                    if loc_id:
-                        locations[str(loc_id)] = loc_fields.get("name", "Unknown Location")
-        
-        # Format output combining device + location info
-        output = f"**Network Devices with Locations**\n\n"
-        output += f"Found {len(devices)} network device(s):\n\n"
-        
-        for device_key, device_data in devices.items():
-            if device_data.get("code") == 0:
-                device_fields = device_data.get("fields", {})
-                device_name = device_fields.get("name", "Unknown Device")
-                
-                # Try to find location using common location field patterns
-                location_name = "No Location"
-                for field_name, field_value in device_fields.items():
-                    if field_value and any(loc_term in field_name.lower() for loc_term in ["location", "site", "building"]):
-                        if str(field_value) in locations:
-                            location_name = locations[str(field_value)]
-                        else:
-                            location_name = str(field_value)
-                        break
-                
-                output += f"🔹 **{device_name}** → Location: {location_name}\n"
-                
-                # Show other relevant device info
-                relevant_fields = ["ip_address", "status", "brand_name", "model_name", "organization_name"]
-                for field in relevant_fields:
-                    if field in device_fields and device_fields[field]:
-                        output += f"   {field}: {device_fields[field]}\n"
-                output += "\n"
-        
-        return output
-        
-    except Exception as e:
-        return f"❌ Error in multi-class query: {str(e)}"
-
-@mcp.tool()
-async def smart_query_processor(
-    query: str,
-    force_class: Optional[str] = None,
-    output_format: str = "auto",
-    limit: int = 100
-) -> str:
-    """
-    **SMART iTop QUERY PROCESSOR**
-    
-    Steps:
-    1. Detect best iTop class from query (or use force_class)
-    2. Discover class schema (fields)
-    3. Analyze query intent using schema
-    4. Map filters to real fields
-    5. Build OQL query with schema-based conditions
-    6. Execute query with optimal fields
-    7. Format output (detailed, summary, table, json)
-    
-    Features:
-
-    - Schema-aware: maps natural language to real fields
-    - Handles filters, grouping, SLA, dates, relationships
-    - No arbitrary limits; user controls output
-    
-    Params:
-    - query: Natural language
-    - force_class: Optional class override
-    - output_format: auto, detailed, summary, table, json
-    - limit: Max results
-    """
-    try:
-        if limit < 1:
-            limit = 1
-        
-        # Step 0: Check if this is a multi-class query first
-        multi_class_result = await handle_multi_class_query(query, {})
-        if multi_class_result:
-            return multi_class_result
-            
-        # Step 1: Detect the best class or use forced class (initial detection)
-        if force_class:
-            class_name = force_class
-            confidence = 1.0
-        else:
-            class_name, confidence, _ = smart_class_detection(query)
-            
-            # Step 1.5: For SLA queries, verify the class has SLA fields
-            if any(term in query.lower() for term in ["sla", "on time", "overdue", "deadline"]) and class_name != "UserRequest":
-                # Check if detected class has SLA fields, if not, try UserRequest
-                temp_client = get_itop_client()
-                temp_schema = {
-                    "operation": "core/get",
-                    "class": class_name,
-                    "key": f"SELECT {class_name}",
-                    "output_fields": "*",
-                    "limit": 1
-                }
-                temp_result = await temp_client.make_request(temp_schema)
-                
-                if temp_result.get("code") == 0 and temp_result.get("objects"):
-                    first_obj = next(iter(temp_result["objects"].values()))
-                    if first_obj.get("code") == 0:
-                        fields = first_obj.get("fields", {})
-                        sla_fields = [f for f in fields.keys() if any(sla_term in f.lower() for sla_term in ["sla", "deadline", "due", "timeout"])]
-                        
-                        # If no SLA fields found, switch to UserRequest
-                        if not sla_fields:
-                            print(f"🔄 No SLA fields found in {class_name}, switching to UserRequest for SLA query")
-                            class_name = "UserRequest"
-                            confidence = 0.9
-        
-        client = get_itop_client()
-        schema_operation = {
-            "operation": "core/get",
-            "class": class_name,
-            "key": f"SELECT {class_name}",
-            "output_fields": "*",
-            "limit": 1
-        }
-        
-        schema_result = await client.make_request(schema_operation)
-        
-        if schema_result.get("code") != 0:
-            return f"❌ **Schema Discovery Error**: {schema_result.get('message', 'Unknown error')}"
-        
-        schema_objects = schema_result.get("objects", {})
-        class_fields = {}
-        
-        if schema_objects:
-            first_obj = next(iter(schema_objects.values()))
-            if first_obj.get("code") == 0:
-                all_fields = first_obj.get("fields", {})
-                class_fields = {
-                    "field_names": list(all_fields.keys()),
-                    "sample_values": {k: str(v)[:100] if v else "" for k, v in all_fields.items()},  # No truncation
-                    "total_fields": len(all_fields),
-                    "key_fields": _identify_key_fields(all_fields),
-                    "display_fields": _identify_display_fields(all_fields)
-                }
-        
-        # Step 3: NOW do intent analysis with schema knowledge
-        query_analysis = analyze_query_intent_with_schema(query, class_name, class_fields)
-        
-        # Step 3.5: INTELLIGENCE LAYER - Classify query complexity and decide on value discovery
-        query_complexity = classify_query_complexity(query, query_analysis)
-        
-       
-        
-        # Step 3.6: SMART VALUE DISCOVERY - Only when needed for complex queries
-        if query_complexity['needs_value_discovery']:
-            print(f"🔍 Performing intelligent value discovery for {len(query_complexity['discovery_fields'])} fields...")
-            query_analysis = await enhance_query_analysis_with_values(query_analysis, class_name, class_fields)
-            
-            # Show discovered values for debugging
-            if query_analysis.get("field_value_discovery"):
-                print(f"📋 Value Discovery Results:")
-                for field, values_info in query_analysis["field_value_discovery"].items():
-                    print(f"   {field}: {len(values_info['values'])} values, type: {values_info['field_type']}")
-        else:
-            print(f"⚡ Skipping value discovery for simple query - optimized for performance")
-        
-        # Step 4: Build smart OQL query based on analysis and discovered fields
-        oql_query, validation_info = await build_smart_oql_query(class_name, query_analysis, class_fields)
-        
-        # Step 4.5: Handle value validation and multi-query scenarios
-        if validation_info.get("has_unvalidated_filters", False):
-            print(f"⚠️ Some filters need value discovery - running validation")
-            # TODO: Implement value discovery for unvalidated filters
-            # For now, we'll proceed without the unvalidated filters
-            skipped_count = len(validation_info.get("skipped_filters", []))
-            print(f"📊 Proceeding with {skipped_count} filters skipped due to lack of validation")
-        
-        # Handle multi-query scenarios (e.g., "closed vs open")
-        if validation_info.get("needs_multi_query", False):
-            comparison_values = validation_info.get("comparison_values", [])
-            print(f"🔄 Executing multi-query for comparison: {comparison_values}")
-            
-            # Execute separate queries for each comparison value
-            all_results = {}
-            for value in comparison_values:
-                # Create a modified query analysis with only this value
-                value_query_analysis = query_analysis.copy()
-                value_filters = []
-                
-                # Add this specific value filter
-                for filter_info in query_analysis.get("discovered_filters", []):
-                    if filter_info.get("is_comparison_value", False) and filter_info["value"] == value:
-                        value_filters.append(filter_info)
-                    elif not filter_info.get("is_comparison_value", False):
-                        value_filters.append(filter_info)
-                
-                value_query_analysis["discovered_filters"] = value_filters
-                value_oql_query, _ = await build_smart_oql_query(class_name, value_query_analysis, class_fields)
-                
-                # Execute this specific query
-                value_operation_data = {
-                    "operation": "core/get",
-                    "class": class_name,
-                    "key": value_oql_query,
-                    "output_fields": determine_smart_output_fields(value_query_analysis, class_fields, output_format),
-                    "limit": limit
-                }
-                
-                value_result = await client.make_request(value_operation_data)
-                
-                if value_result.get("code") == 0:
-                    value_objects = value_result.get("objects", {})
-                    all_results[value] = {
-                        "objects": value_objects,
-                        "count": len(value_objects) if value_objects else 0,
-                        "query": value_oql_query
-                    }
-                    print(f"✅ Query for '{value}': {len(value_objects) if value_objects else 0} results")
-                else:
-                    all_results[value] = {
-                        "error": value_result.get("message", "Unknown error"),
-                        "query": value_oql_query
-                    }
-                    print(f"❌ Query for '{value}' failed: {value_result.get('message', 'Unknown error')}")
-            
-            # Format multi-query results
-            header = f"**🔄 Multi-Query Comparison Results**\n\n"
-            header += f"**Query**: \"{query}\"\n"
-            header += f"**Detected Class**: {class_name}\n"
-            header += f"**Comparison Values**: {', '.join(comparison_values)}\n\n"
-            
-            content = ""
-            for value, result_info in all_results.items():
-                content += f"## {value.title()}\n"
-                if "error" in result_info:
-                    content += f"❌ Error: {result_info['error']}\n"
-                    content += f"Query: `{result_info['query']}`\n\n"
-                else:
-                    objects = result_info["objects"]
-                    count = result_info["count"]
-                    content += f"**Count**: {count}\n"
-                    content += f"**Query**: `{result_info['query']}`\n\n"
-                    
-                    if count > 0 and output_format != "summary":
-                        content += _format_objects_output_smart(
-                            objects, 
-                            class_name, 
-                            output_format, 
-                            class_fields, 
-                            [], 
-                            result_info['query']
-                        )
-                    content += "\n"
-            
-            return header + content
-        
-        # Step 5: Determine optimal output fields based on query type and discovered schema (SMART SELECTION)
-        output_fields = determine_smart_output_fields(query_analysis, class_fields, output_format)
-        
-        # Step 6: Determine output format (dynamic based on intent)
-        if output_format == "auto":
-            output_format = query_analysis.get("format_preference", "detailed")
-        
-        # Step 7: Execute the optimized query
-        operation_data = {
-            "operation": "core/get",
-            "class": class_name,
-            "key": oql_query,
-            "output_fields": output_fields,
-            "limit": limit
-        }
-        
-        result = await client.make_request(operation_data)
-        
-        if result.get("code") != 0:
-            return f"❌ **Query Error**: {result.get('message', 'Unknown error')}"
-            return f"❌ **Query Error**: {result.get('message', 'Unknown error')}"
-        
-        objects = result.get("objects", {})
-        if objects is None:
-            objects = {}
-        
-        # Extract actual count from API response message
-        actual_count = _extract_count_from_message(result.get("message", ""))
-        returned_count = len(objects)
-        
-        # Debug: Show the actual message for troubleshooting
-        debug_msg = result.get("message", "")
-        if debug_msg:
-            print(f"🔍 DEBUG - API Response Message: '{debug_msg}'")
-            print(f"🔍 DEBUG - Extracted Count: {actual_count}")
-            print(f"🔍 DEBUG - Returned Count: {returned_count}")
-        
-        # Step 8: Build intelligent response header with schema info
-        header = f"**🚀 Smart Query Results**\n\n"
-        header += f"**Operation Data**: {json.dumps(operation_data, indent=2)}\n"
-        header += f"**Query**: \"{query}\"\n"
-        header += f"**Detected Class**: {class_name} (confidence: {confidence:.1%})\n"
-        header += f"**Action**: {query_analysis.get('action', 'list').title()}\n"
-        header += f"**Query Complexity**: {query_complexity['complexity'].title()}\n"
-        
-        # Show schema discovery info
-        header += f"**Schema Discovery**: Found {class_fields.get('total_fields', 0)} total fields\n"
-        header += f"**Key Fields Used**: {', '.join(class_fields.get('key_fields', []))}\n"
-        
-        # Show intelligent value discovery info
-        if query_complexity['needs_value_discovery'] and query_analysis.get('field_value_discovery'):
-            discovered_fields = list(query_analysis['field_value_discovery'].keys())
-            header += f"**Value Discovery**: Analyzed {len(discovered_fields)} field(s): {', '.join(discovered_fields)}\n"
-        elif query_complexity['complexity'] == 'simple':
-            header += f"**Value Discovery**: Skipped for performance (simple query)\n"
-        
-        # Show discovered filters if any
-        discovered_filters = query_analysis.get("discovered_filters", [])
-        if discovered_filters:
-            header += f"**Schema-Aware Filters**: {len(discovered_filters)} applied\n"
-            for filter_info in discovered_filters:
-                header += f"  - {filter_info['field']} {filter_info['operator']} {filter_info['value']}\n"
-        
-        # Always show count information in the main output for API consumption
-        if actual_count is not None and actual_count > 0:
-            header += f"**Total Records Found**: {actual_count}\n"
-            header += f"**Records Returned**: {returned_count}\n"
-        else:
-            header += f"**Total Records Found**: Not available\n"
-            header += f"**Records Returned**: {returned_count}\n"
-            
-        header += f"**Output Fields**: {output_fields}\n\n"
-        header += "---\n\n"
-        
-        if not objects:
-            if actual_count is not None and actual_count > 0:
-                return header + f"Found {actual_count} {class_name} object(s) but none returned (possibly due to access restrictions or filters)."
-            else:
-                # INTELLIGENT FALLBACK: When 0 results and we have filters, try to find better values
-                discovered_filters = query_analysis.get("discovered_filters", [])
-                if discovered_filters and not query_complexity.get('needs_value_discovery', False):
-                    # Only for queries that didn't already do value discovery
-                    fallback_header = header + f"🔍 **No results found. Checking for better field value matches...**\n\n"
-                    
-                    # Try to find better values for each filter
-                    suggested_fixes = []
-                    for filter_info in discovered_filters:
-                        field = filter_info.get("field")
-                        original_value = filter_info.get("value")
-                        
-                        if field and original_value:
-                            # Discover actual values for this field
-                            field_values = await discover_field_values(class_name, field, limit=100)
-                            
-                            if field_values["values"]:
-                                # Try to find a better match
-                                best_match = find_best_value_match(original_value, field_values["values"])
-                                
-                                if best_match != original_value:
-                                    suggested_fixes.append({
-                                        "field": field,
-                                        "original": original_value,
-                                        "suggested": best_match,
-                                        "all_values": field_values["values"][:10]  # Show first 10 available values
-                                    })
-                    
-                    if suggested_fixes:
-                        fallback_header += "**💡 Suggested fixes:**\n"
-                        for fix in suggested_fixes:
-                            fallback_header += f"- Field **{fix['field']}**: You searched for '{fix['original']}', did you mean '{fix['suggested']}'?\n"
-                            fallback_header += f"  Available values: {', '.join(fix['all_values'])}\n"
-                        
-                        # Try the query with the first suggested fix
-                        if suggested_fixes:
-                            first_fix = suggested_fixes[0]
-                            fallback_header += f"\n🔄 **Trying with suggested value '{first_fix['suggested']}'...**\n\n"
-                            
-                            # Build new OQL with corrected value
-                            corrected_query = oql_query.replace(f"= '{first_fix['original']}'", f"= '{first_fix['suggested']}'")
-                            
-                            # Execute corrected query
-                            corrected_operation = operation_data.copy()
-                            corrected_operation["key"] = corrected_query
-                            
-                                                       
-                            corrected_result = await client.make_request(corrected_operation)
-                            
-                            if corrected_result.get("code") == 0:
-                                corrected_objects = corrected_result.get("objects", {})
-                                if corrected_objects:
-                                    fallback_header += f"✅ **Found {len(corrected_objects)} results with corrected value!**\n\n"
-                                    
-                                    # Format the corrected results
-                                    corrected_formatted = _format_objects_output_smart(
-                                        corrected_objects, 
-                                        class_name, 
-                                        output_format, 
-                                        class_fields, 
-                                        query_analysis.get("requested_fields", []), 
-                                        corrected_query
-                                    )
-                                    
-                                    return fallback_header + corrected_formatted
-                    
-                    return fallback_header + "❌ No better matches found. The query criteria may not match any existing data."
-                
-                # Standard no results message
-                no_objects_msg = f"No {class_name} objects found matching your query."
-                if actual_count is None:
-                    no_objects_msg += " (Total count not available - this could mean no objects exist or access restrictions apply.)"
-                return header + no_objects_msg
-        
-        # Step 9: Handle different action types with smart formatting
-        if query_analysis.get("action") == "count":
-            # For count queries, always show total count prominently
-            if actual_count is not None and actual_count > 0:
-                display_count = actual_count
-                count_source = "from API message"
-            else:
-                display_count = returned_count
-                count_source = "from returned objects"
-            
-            count_result = f"📊 **Count Result**: {display_count} {class_name} object(s) ({count_source})\n"
-            count_result += f"**Total Count**: {actual_count if actual_count is not None else 'Not available'}\n"
-            
-            if query_analysis.get("grouping"):
-                count_result += f"\n**Breakdown by {query_analysis['grouping']}:**\n"
-                groups = {}
-                for obj_data in objects.values():
-                    if obj_data.get("code") == 0:
-                        fields = obj_data.get("fields", {})
-                        group_value = fields.get(query_analysis["grouping"], "Unknown")
-                        groups[group_value] = groups.get(group_value, 0) + 1
-                
-                for group_name, count in sorted(groups.items()):
-                    count_result += f"• {group_name}: {count}\n"
-            
-            return header + count_result
-        
-        
-        
-        # Step 10: Smart object formatting using discovered schema (NO FIELD LIMITS)
-        formatted_output = _format_objects_output_smart(
-            objects, 
-            class_name, 
-            output_format, 
-            class_fields, 
-            query_analysis.get("requested_fields", []), 
-            oql_query
-        )
-        
-        # Add available fields summary (show more fields now)
-        if class_fields.get("field_names") and output_format == "detailed":
-            footer = f"\n\n💡 **Available Fields in {class_name}**:\n"
-            sample_fields = class_fields.get("field_names", [])[:20]  # Increased from 10 to 20
-            for field in sample_fields:
-                sample_val = class_fields.get("sample_values", {}).get(field, "")
-                if sample_val:
-                    footer += f"- **{field}**: {sample_val}\n"
-                else:
-                    footer += f"- **{field}**\n"
-            if len(class_fields.get("field_names", [])) > 20:
-                footer += f"...and {len(class_fields.get('field_names', [])) - 20} more fields...\n"
-            footer += f"**Total**: {class_fields.get('total_fields', 0)} fields available"
-            formatted_output += footer
-        
-        return header + formatted_output
-        
-    except Exception as e:
-        return f"❌ **Smart Query Error**: {str(e)}"
-
-@mcp.tool()
-async def discover_available_classes(search_term: Optional[str] = None) -> str:
-    """
-    Discover available iTop classes with their descriptions and use cases.
-    
-    Args:
-        search_term: Optional term to filter classes by (e.g., "ticket", "server", "user")
-    """
-    try:
-        result = "📚 **iTop Class Discovery**\n\n"
-        result = "📚 **iTop Class Discovery**\n\n"
-        
-        if search_term:
-            result += f"🔍 **Searching for**: \"{search_term}\"\n\n"
-            search_lower = search_term.lower()
-        else:
-            result += "📋 **All Available Classes by Category**\n\n"
-        if search_term:
-            result += f"🔍 **Searching for**: \"{search_term}\"\n\n"
-            search_lower = search_term.lower()
-        else:
-            result += "📋 **All Available Classes by Category**\n\n"
-        
-        total_classes = 0
-        
-        for category_name, category_list in ITOP_CLASS_TAXONOMY.items():
-            category_header_added = False
-            
-            for use_case in category_list:
-                use_case_header_added = False
-                matching_classes = []
-                
-                for class_name in use_case["classes"]:
-                    # Filter by search term if provided
-                    if search_term:
-                        if (search_lower in class_name.lower() or 
-                            search_lower in use_case["description"].lower() or
-                            any(search_lower in keyword for keyword in use_case.get("keywords", []))):
-                            matching_classes.append(class_name)
-                    else:
-                        matching_classes.append(class_name)
-                
-                if matching_classes:
-                    if not category_header_added:
-                        result += f"## {category_name.replace('And', ' & ')}\n\n"
-                        category_header_added = True
-                    
-                    if not use_case_header_added:
-                        result += f"### 🏷️ {use_case['name']}\n"
-                        result += f"*{use_case['description']}*\n\n"
-                        use_case_header_added = True
-                    
-                    result += f"**Classes**: {', '.join(matching_classes)}\n"
-                    if use_case.get("keywords"):
-                        result += f"**Keywords**: {', '.join(use_case['keywords'][:8])}\n"
-                    result += "\n"
-                    
-                    total_classes += len(matching_classes)
-        
-        if search_term and total_classes == 0:
-            result += f"❌ No classes found matching '{search_term}'\n\n"
-            result += "💡 **Try searching for**: ticket, server, pc, user, organization, change\n"
-        else:
-            result += f"📊 **Total Classes**: {total_classes}\n\n"
-        
-        result += "💡 **Usage Tips**:\n"
-        result += "• Use `smart_query_processor()` with natural language\n"
-        result += "• Example: \"Show me all servers\" or \"Count tickets by status\"\n"
-        result += "• The system will auto-detect the best class to use\n"
-        
-        return result
-        
-    except Exception as e:
-        return f"Error discovering classes: {str(e)}"
 def _extract_count_from_message(message: str) -> int:
     """Extract count from API response message with flexible pattern matching."""
     try:
-        import re
-        
         if not message:
             return 0
         
@@ -2492,7 +281,6 @@ def _extract_count_from_message(message: str) -> int:
             match = re.search(pattern, message_lower)
             if match:
                 count = int(match.group(1))
-                # Sanity check: reasonable count range
                 if 0 <= count <= 1000000:  # Up to 1M records seems reasonable
                     return count
         
@@ -2500,10 +288,4474 @@ def _extract_count_from_message(message: str) -> int:
     except (ValueError, AttributeError):
         return 0
 
+# =============================================================================
+# Smart Filter Engine - Universal Filtering Logic
+# =============================================================================
 
+class SmartFilterEngine:
+    """Universal filter extraction engine that works across all iTop classes"""
+    
+    # Universal field patterns that work across most iTop classes
+    UNIVERSAL_PATTERNS = {
+        # Priority patterns (UserRequest, Incident, Problem, etc.)
+        "priority": {
+            "critical": {"field": "priority", "value": "1", "patterns": ["critical", "priority 1", "p1", "urgent"]},
+            "high": {"field": "priority", "value": "2", "patterns": ["high priority", "priority 2", "p2"]},
+            "medium": {"field": "priority", "value": "3", "patterns": ["medium priority", "priority 3", "p3"]},
+            "low": {"field": "priority", "value": "4", "patterns": ["low priority", "priority 4", "p4"]}
+        },
+        
+        # Status patterns (different for each class but similar concepts)
+        "status": {
+            "new": {"patterns": ["new", "created", "submitted"]},
+            "open": {"patterns": ["open", "ongoing", "active", "in progress"]},
+            "closed": {"patterns": ["closed", "completed", "finished"]},
+            "resolved": {"patterns": ["resolved", "fixed", "solved"]},
+            "pending": {"patterns": ["pending", "waiting", "on hold"]},
+            "assigned": {"patterns": ["assigned", "allocated"]},
+            "approved": {"patterns": ["approved", "accepted"]},
+            "rejected": {"patterns": ["rejected", "denied", "declined"]},
+            "implemented": {"patterns": ["implemented", "deployed", "done"]},
+            "escalated": {"patterns": ["escalated", "escalation"]}
+        },
+        
+        # Time patterns (universal)
+        "time": {
+            "today": {"field": "start_date", "operator": ">=", "value_fn": lambda: datetime.now().strftime("%Y-%m-%d 00:00:00")},
+            "yesterday": {"field": "start_date", "operator": ">=", "value_fn": lambda: (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")},
+            "this_week": {"field": "start_date", "operator": ">=", "value_fn": lambda: (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")},
+            "last_7_days": {"field": "start_date", "operator": ">=", "value_fn": lambda: (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d 00:00:00")},
+            "last_15_days": {"field": "start_date", "operator": ">=", "value_fn": lambda: (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d 00:00:00")},
+            "last_30_days": {"field": "start_date", "operator": ">=", "value_fn": lambda: (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d 00:00:00")},
+            # FIXED: Use <= for "not updated in X hours" (items older than X hours)
+            "24_hours_old": {"field": "last_update", "operator": "<=", "value_fn": lambda: (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")},
+            "48_hours_old": {"field": "last_update", "operator": "<=", "value_fn": lambda: (datetime.now() - timedelta(hours=48)).strftime("%Y-%m-%d %H:%M:%S")}
+        },
+        
+        # Organization/Team patterns
+        "organization": {
+            "patterns": ["organization", "org", "company"],
+            "field": "org_name"
+        },
+        
+        "team": {
+            "patterns": ["team", "group", "department"],
+            "field": "team_name"
+        },
+        
+        # People patterns
+        "caller": {
+            "patterns": ["caller", "user", "requester"],
+            "field": "caller_name"
+        },
+        
+        "agent": {
+            "patterns": ["agent", "assignee", "assigned to"],
+            "field": "agent_name"
+        }
+    }
+    
+    # Class-specific field mappings
+    CLASS_FIELD_MAPPINGS = {
+        "UserRequest": {
+            "status_field": "status",
+            "status_values": {
+                "new": "new", "open": ["new", "assigned", "pending"], "closed": "closed",
+                "resolved": "resolved", "pending": "pending", "assigned": "assigned"
+            }
+        },
+        "Ticket": {
+            "status_field": "operational_status", 
+            "status_values": {
+                "open": "ongoing", "closed": "closed", "resolved": "resolved"
+            }
+        },
+        "Change": {
+            "status_field": "status",
+            "status_values": {
+                "new": "new", "approved": "approved", "implemented": "implemented",
+                "closed": "closed", "rejected": "rejected", "completed": ["implemented", "closed"],
+                "open": ["new", "approved"], "not_completed": ["new", "approved", "rejected"]
+            }
+        },
+        "Incident": {
+            "status_field": "status",
+            "status_values": {
+                "new": "new", "assigned": "assigned", "resolved": "resolved", 
+                "closed": "closed", "pending": "pending"
+            }
+        },
+        "Problem": {
+            "status_field": "status",
+            "status_values": {
+                "new": "new", "assigned": "assigned", "resolved": "resolved",
+                "closed": "closed", "known_error": "known_error"
+            }
+        }
+    }
+    
+    @classmethod
+    def extract_filters(cls, query_lower: str, class_name: str) -> List[Dict[str, Any]]:
+        """Smart filter extraction that adapts to different iTop classes"""
+        filters = []
+        
+        # Extract priority filters (universal)
+        # Only for classes that support priority field (not generic Ticket class)
+        if class_name not in ["Ticket"]:
+            priority_filter = cls._extract_priority_filter(query_lower)
+            if priority_filter:
+                filters.append(priority_filter)
+        
+        # Extract status filters (class-specific)
+        status_filter = cls._extract_status_filter(query_lower, class_name)
+        if status_filter:
+            filters.append(status_filter)
+        
+        # Extract time filters (universal)
+        time_filter = cls._extract_time_filter(query_lower)
+        if time_filter:
+            filters.append(time_filter)
+        
+        # Extract organization/team filters
+        org_filter = cls._extract_organization_filter(query_lower)
+        if org_filter:
+            filters.append(org_filter)
+        
+        # Extract class-specific filters
+        class_filters = cls._extract_class_specific_filters(query_lower, class_name)
+        filters.extend(class_filters)
+        
+        return filters
+    
+    @classmethod
+    def _extract_priority_filter(cls, query_lower: str) -> Optional[Dict[str, Any]]:
+        """Extract priority filters dynamically - works for most ticket classes but NOT for generic Ticket class"""
+        # Don't use priority field for generic Ticket class as it doesn't have it
+        # Priority is available in subclasses like UserRequest, Incident, Problem
+        
+        # Dynamic priority mapping - can be extended easily
+        priority_mappings = {
+            "critical": "1", "priority 1": "1", "p1": "1", "urgent": "1",
+            "high": "2", "priority 2": "2", "p2": "2", "high priority": "2",
+            "medium": "3", "priority 3": "3", "p3": "3", "normal": "3", "medium priority": "3",
+            "low": "4", "priority 4": "4", "p4": "4", "low priority": "4"
+        }
+        
+        # Find all priority terms mentioned in the query
+        found_priorities = []
+        for priority_term, priority_value in priority_mappings.items():
+            if priority_term in query_lower:
+                found_priorities.append((priority_term, priority_value))
+        
+        if not found_priorities:
+            return None
+        
+        if len(found_priorities) == 1:
+            # Single priority
+            term, value = found_priorities[0]
+            return {
+                "field": "priority",
+                "operator": "=",
+                "value": value,
+                "display_name": f"{term} priority"
+            }
+        else:
+            # Multiple priorities - use IN operator for OR logic
+            unique_values = list(set([value for _, value in found_priorities]))
+            unique_terms = list(set([term for term, _ in found_priorities]))
+            
+            if len(unique_values) == 1:
+                # Multiple terms mapping to same priority value
+                return {
+                    "field": "priority", 
+                    "operator": "=",
+                    "value": unique_values[0],
+                    "display_name": f"{'/'.join(unique_terms)} priority"
+                }
+            else:
+                # Multiple different priorities
+                return {
+                    "field": "priority",
+                    "operator": "IN", 
+                    "values": unique_values,
+                    "display_name": f"{'/'.join(unique_terms)} priority"
+                }
+    
+    @classmethod
+    def _extract_status_filter(cls, query_lower: str, class_name: str) -> Optional[Dict[str, Any]]:
+        """Extract status filters - only when explicitly mentioned as filters"""
+        class_mapping = cls.CLASS_FIELD_MAPPINGS.get(class_name, {})
+        status_field = class_mapping.get("status_field", "status")
+        status_values = class_mapping.get("status_values", {})
+        
+        # Only add status filters when they appear to be intentional filters
+        # Look for patterns like "closed tickets", "open requests", etc.
+        status_filter_patterns = {
+            "new": [r'\bnew\s+(?:tickets|requests|incidents|changes|problems)\b'],
+            "open": [r'\bopen\s+(?:tickets|requests|incidents|changes|problems)\b', r'\bongoing\s+(?:tickets|requests|incidents|changes|problems)\b'],
+            "closed": [r'\bclosed\s+(?:tickets|requests|incidents|changes|problems)\b'],
+            "resolved": [r'\bresolved\s+(?:tickets|requests|incidents|changes|problems)\b'],
+            "pending": [r'\bpending\s+(?:tickets|requests|incidents|changes|problems)\b'],
+            "assigned": [r'\bassigned\s+(?:tickets|requests|incidents|changes|problems)\b']
+        }
+        
+        for status_concept, patterns in status_filter_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, query_lower):
+                    # Map to class-specific status value
+                    class_status_value = status_values.get(status_concept)
+                    if class_status_value:
+                        if isinstance(class_status_value, list):
+                            return {
+                                "field": status_field,
+                                "operator": "IN",
+                                "values": class_status_value,
+                                "display_name": f"{status_concept} status"
+                            }
+                        else:
+                            return {
+                                "field": status_field,
+                                "operator": "=",
+                                "value": class_status_value,
+                                "display_name": f"{status_concept} status"
+                            }
+        return None
+    
+    @classmethod
+    def _extract_time_filter(cls, query_lower: str) -> Optional[Dict[str, Any]]:
+        """Extract time-based filters"""
+        # Enhanced patterns for time-based queries
+        time_patterns = {
+            "today": ["today"],
+            "yesterday": ["yesterday"],
+            "this_week": ["this week", "past week"],
+            "last_7_days": ["last 7 days", "7 days", "past 7 days"],
+            "last_15_days": ["last 15 days", "15 days", "past 15 days"],
+            "last_30_days": ["last 30 days", "30 days", "past 30 days"],
+            "24_hours_old": ["24 hours", "not updated in 24 hours", "not updated in the last 24 hours"],
+            "48_hours_old": ["48 hours", "not updated in 48 hours", "not updated in the last 48 hours"]
+        }
+        
+        for time_key, patterns in time_patterns.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    time_config = cls.UNIVERSAL_PATTERNS["time"][time_key]
+                    return {
+                        "field": time_config["field"],
+                        "operator": time_config["operator"],
+                        "value": time_config["value_fn"](),
+                        "display_name": pattern
+                    }
+        
+        # Handle more flexible time patterns with regex
+        # Pattern: "not updated in the last X hours"
+        hours_match = re.search(r'not updated in (?:the last )?(\d+) hours?', query_lower)
+        if hours_match:
+            hours = int(hours_match.group(1))
+            cutoff_time = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+            return {
+                "field": "last_update",
+                "operator": "<=",
+                "value": cutoff_time,
+                "display_name": f"not updated in the last {hours} hours"
+            }
+        
+        return None
+    
+    @classmethod
+    def _extract_organization_filter(cls, query_lower: str) -> Optional[Dict[str, Any]]:
+        """Extract organization/team filters"""
+        # Look for specific organization mentions
+        org_match = re.search(r'organization ["\']([^"\']+)["\']|org ["\']([^"\']+)["\']', query_lower)
+        if org_match:
+            org_name = org_match.group(1) or org_match.group(2)
+            return {
+                "field": "org_name",
+                "operator": "LIKE",
+                "value": f"%{org_name}%",
+                "display_name": f"organization contains '{org_name}'"
+            }
+        
+        # Look for team mentions
+        team_match = re.search(r'team ["\']([^"\']+)["\']', query_lower)
+        if team_match:
+            team_name = team_match.group(1)
+            return {
+                "field": "team_name",
+                "operator": "LIKE",
+                "value": f"%{team_name}%",
+                "display_name": f"team contains '{team_name}'"
+            }
+        
+        return None
+    
+    @classmethod
+    def _extract_class_specific_filters(cls, query_lower: str, class_name: str) -> List[Dict[str, Any]]:
+        """Extract filters specific to the class"""
+        filters = []
+        
+        # Enhanced team assignment filters for ticket classes
+        if class_name in ["Ticket", "UserRequest", "Incident", "Problem", "Change"]:
+            # More precise team matching patterns
+            team_patterns = [
+                (r'assigned to (?:the )?(\w+(?:\s+\w+){0,2})(?:\s+team|\s*$)', 1),           # "assigned to support team"
+                (r'team ["\']([^"\']+)["\']', 1),                                           # 'team "support"'
+                (r'(\w+(?:\s+\w+){0,1})\s+team(?:\s|$)', 1),                             # "support team", "database team"
+                (r'tickets?\s+(?:for|from|by)\s+(?:the\s+)?(\w+(?:\s+\w+){0,2})\s+team', 1),  # "tickets for support team"
+                (r'(?:for|by)\s+(\w+(?:\s+\w+){0,1})(?:\s+team|\s*$)', 1)                # "for support", "by infrastructure"
+            ]
+            
+            for pattern, group_idx in team_patterns:
+                team_match = re.search(pattern, query_lower)
+                if team_match:
+                    team_name = team_match.group(group_idx).strip()
+                    # Filter out common words and ensure it's a reasonable team name
+                    excluded_words = {'the', 'and', 'for', 'by', 'to', 'in', 'on', 'with', 'from', 'tickets', 'ticket', 'user', 'requests', 'request', 'incidents', 'incident', 'show', 'me'}
+                    if len(team_name) > 2 and team_name not in excluded_words and not any(word in excluded_words for word in team_name.split()):
+                        filters.append({
+                            "field": "team_name",
+                            "operator": "LIKE",
+                            "value": f"%{team_name}%",
+                            "display_name": f"team: {team_name}"
+                        })
+                        break  # Only add one team filter to avoid duplicates
+        
+        # Simplified SLA filters for classes that support it (only add if explicitly mentioned)
+        if class_name in ["UserRequest", "Incident"]:
+            # Only add SLA filters for explicit SLA-related queries to avoid over-filtering
+            if "sla breach" in query_lower or "sla missed" in query_lower:
+                filters.append({
+                    "field": "sla_ttr_passed",
+                    "operator": "=",
+                    "value": "yes",  # "yes" means SLA was passed/missed (late)
+                    "display_name": "SLA breached"
+                })
+            elif "sla met" in query_lower:
+                filters.append({
+                    "field": "sla_ttr_passed", 
+                    "operator": "=",
+                    "value": "no",  # "no" means SLA was not passed/missed (on time)
+                    "display_name": "SLA met"
+                })
+        
+        # Change-specific filters (only for actual Change class)
+        if class_name == "Change":
+            if "emergency" in query_lower:
+                filters.append({
+                    "field": "finalclass",
+                    "operator": "=",
+                    "value": "EmergencyChange",
+                    "display_name": "emergency changes"
+                })
+            elif "normal" in query_lower and "change" in query_lower:
+                filters.append({
+                    "field": "finalclass",
+                    "operator": "=",
+                    "value": "NormalChange",
+                    "display_name": "normal changes"
+                })
+            elif "routine" in query_lower:
+                filters.append({
+                    "field": "finalclass",
+                    "operator": "=",
+                    "value": "RoutineChange",
+                    "display_name": "routine changes"
+                })
+        
+        return filters
+
+# =============================================================================
+# Smart Query Builder - Universal OQL Generation
+# =============================================================================
+
+class SmartQueryBuilder:
+    """Universal OQL query builder that works across all iTop classes"""
+    
+    @classmethod
+    def build_oql_query(cls, class_name: str, filters: List[Dict[str, Any]]) -> str:
+        """Build OQL query from filters"""
+        base_query = f"SELECT {class_name}"
+        conditions = []
+        
+        # Group filters by field to avoid duplicates
+        field_filters = {}
+        for filter_info in filters:
+            field = filter_info["field"]
+            if field not in field_filters:
+                field_filters[field] = []
+            field_filters[field].append(filter_info)
+        
+        # Build conditions, combining multiple filters for the same field
+        for field, filter_list in field_filters.items():
+            if len(filter_list) == 1:
+                # Single filter for this field
+                condition = cls._build_condition(filter_list[0])
+                if condition:
+                    conditions.append(condition)
+            else:
+                # Multiple filters for same field - combine with OR if they're IN operators
+                in_values = []
+                other_conditions = []
+                
+                for filter_info in filter_list:
+                    if filter_info["operator"] == "IN":
+                        in_values.extend(filter_info.get("values", []))
+                    else:
+                        condition = cls._build_condition(filter_info)
+                        if condition:
+                            other_conditions.append(condition)
+                
+                if in_values:
+                    # Deduplicate values
+                    unique_values = list(set(in_values))
+                    if len(unique_values) == 1:
+                        conditions.append(f"{field} = '{unique_values[0]}'")
+                    else:
+                        values_str = "', '".join(unique_values)
+                        conditions.append(f"{field} IN ('{values_str}')")
+                
+                conditions.extend(other_conditions)
+        
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+        
+        return base_query
+    
+    @classmethod
+    def _build_condition(cls, filter_info: Dict[str, Any]) -> str:
+        """Build a single OQL condition from filter info"""
+        field = filter_info["field"]
+        operator = filter_info["operator"]
+        
+        if operator == "IN":
+            values = filter_info["values"]
+            values_str = "', '".join(values)
+            return f"{field} IN ('{values_str}')"
+        elif operator == "LIKE":
+            value = filter_info["value"]
+            return f"{field} LIKE '{value}'"
+        elif operator in ["=", "!=", ">", "<", ">=", "<="]:
+            value = filter_info["value"]
+            return f"{field} {operator} '{value}'"
+        
+        return ""
+
+# =============================================================================
+# Smart Grouping Engine - Universal Grouping Logic
+# =============================================================================
+
+class SmartGroupingEngine:
+    """Universal grouping logic that works across all iTop classes"""
+    
+    # Universal grouping field mappings
+    GROUPING_MAPPINGS = {
+        "status": {"UserRequest": "status", "Ticket": "operational_status", "Change": "status", "Incident": "status", "Problem": "status"},
+        "priority": "priority",  # Universal field
+        "organization": "org_name",  # Universal field
+        "team": "team_name",  # Universal field
+        "agent": "agent_name",  # Universal field
+        "type": "finalclass",  # Universal field for class identification
+        "caller": "caller_name"  # Universal field
+    }
+    
+    @classmethod
+    def detect_grouping(cls, query_lower: str, class_name: str) -> Optional[str]:
+        """Detect what field to group by from the query"""
+        grouping_patterns = {
+            "status": ["by status", "group by status", "status wise", "breakdown by status"],
+            "priority": ["by priority", "group by priority", "priority wise", "breakdown by priority"],
+            "organization": ["by organization", "by org", "organization wise", "org wise", "group by organization"],
+            "team": ["by team", "group by team", "team wise", "breakdown by team"],
+            "agent": ["by agent", "group by agent", "agent wise", "breakdown by agent"],
+            "type": ["by type", "group by type", "type wise", "breakdown by type"],
+            "caller": ["by caller", "group by caller", "caller wise", "breakdown by caller"]
+        }
+        
+        for group_concept, patterns in grouping_patterns.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    # Map to actual field name for this class
+                    field_mapping = cls.GROUPING_MAPPINGS.get(group_concept)
+                    if isinstance(field_mapping, dict):
+                        return field_mapping.get(class_name, group_concept)
+                    else:
+                        return field_mapping
+        
+        return None
+    
+    @classmethod
+    def format_grouped_results(cls, objects: dict, group_field: str, class_name: str) -> str:
+        """Enhanced grouped results formatter that shows details, not just counts"""
+        if not objects:
+            return f"**No data to group by {group_field}**\n"
+        
+        groups = {}
+        group_details = {}
+        
+        for obj_key, obj_data in objects.items():
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                group_value = fields.get(group_field, "Unknown")
+                
+                if group_value not in groups:
+                    groups[group_value] = 0
+                    group_details[group_value] = []
+                
+                groups[group_value] += 1
+                group_details[group_value].append((obj_key, fields))
+        
+        output = f"**{class_name} Grouped by {group_field.replace('_', ' ').title()}:**\n\n"
+        
+        for group_name in sorted(groups.keys()):
+            count = groups[group_name]
+            details = group_details[group_name]
+            
+            output += f"## **{group_name}** ({count} items)\n"
+            
+            # Show first few items with details (limit to avoid overwhelming)
+            shown_items = min(5, len(details))
+            for i, (obj_key, fields) in enumerate(details[:shown_items], 1):
+                # Get meaningful identifier
+                identifier = (fields.get("ref") or 
+                            fields.get("name") or 
+                            fields.get("friendlyname") or 
+                            fields.get("title") or 
+                            obj_key)
+                
+                # Get status or description
+                status_info = ""
+                if fields.get("operational_status"):
+                    status_info = f" (Status: {fields['operational_status']})"
+                elif fields.get("status"):
+                    status_info = f" (Status: {fields['status']})"
+                
+                # Get additional context
+                context = ""
+                if fields.get("caller_name"):
+                    context += f" - Caller: {fields['caller_name']}"
+                elif fields.get("team_name"):
+                    context += f" - Team: {fields['team_name']}"
+                
+                output += f"{i}. **{identifier}**{status_info}{context}\n"
+            
+            if len(details) > shown_items:
+                remaining = len(details) - shown_items
+                output += f"   ... and {remaining} more items\n"
+            
+            output += "\n"
+        
+        return output
+
+# =============================================================================
+# Universal Smart Handler Base Class
+# =============================================================================
+
+class SmartHandlerBase:
+    """Universal base handler that all specific handlers inherit from"""
+    
+    def __init__(self, client: ITopClient, class_name: str):
+        self.client = client
+        self.class_name = class_name
+    
+    def parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Universal query intent parser"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "comparison": False,
+            "sla_analysis": False
+        }
+        
+        # Detect action type
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org", "by status", "by priority", "by team", "by agent", "by type"]):
+            intent["action"] = "group"
+        elif any(word in query_lower for word in ["compare", "vs", "versus", "v/s"]):
+            intent["action"] = "compare"
+            intent["comparison"] = True
+        
+        # Detect SLA analysis
+        if any(word in query_lower for word in ["sla"]):
+            intent["sla_analysis"] = True
+        
+        # Extract filters using smart engine
+        intent["filters"] = SmartFilterEngine.extract_filters(query_lower, self.class_name)
+        
+        # Extract grouping using smart engine
+        intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
+        
+        return intent
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query using smart query builder"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Universal output field determination"""
+        if intent["action"] == "count":
+            if intent["grouping"]:
+                return f"id,{intent['grouping']}"
+            else:
+                return "id"
+        
+        # For detailed queries, use all fields
+        return "*+"
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Universal query processor"""
+        try:
+            intent = self.parse_query_intent(query)
+            
+            # Handle comparison queries
+            if intent["comparison"]:
+                return await self._handle_comparison_query(query, intent, limit)
+            
+            # Build and execute query
+            oql_query = self.build_oql_query(intent)
+            output_fields = self.determine_output_fields(intent)
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": output_fields,
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            # Check for errors
+            if result.get("code") != 0:
+                error_msg = result.get("message", "Unknown error")
+                if "unknown class" in error_msg.lower() or "class not found" in error_msg.lower():
+                    return f"⚠️ **{self.class_name} Class Not Available**: The {self.class_name} class may not be configured in your iTop instance.\n\n**Error**: {error_msg}\n\n**Suggestion**: Use the generic Ticket handler instead or contact your iTop administrator."
+                return f"❌ **{self.class_name} Query Error**: {error_msg}"
+            
+            return self._format_results(result, intent, query, oql_query)
+            
+        except Exception as e:
+            return f"❌ **{self.class_name} Handler Error**: {str(e)}"
+    
+    async def _handle_comparison_query(self, query: str, intent: Dict[str, Any], limit: int) -> str:
+        """Universal comparison query handler"""
+        query_lower = query.lower()
+        
+        # Handle SLA comparisons
+        if "closed on time" in query_lower and ("not closed on time" in query_lower or "not on time" in query_lower):
+            return await self._handle_sla_comparison(query, intent, limit)
+        
+        # Handle "closed vs not closed" or "completed vs not completed" comparisons
+        if ("closed" in query_lower and "not closed" in query_lower) or ("completed" in query_lower and "not completed" in query_lower):
+            return await self._handle_closed_vs_open_comparison(query, intent, limit)
+        
+        # Extract comparison terms
+        comparison_match = re.search(r'(\w+)\s+(vs|versus|v/s|compared to)\s+(\w+)', query_lower)
+        if not comparison_match:
+            return "❌ Could not parse comparison query"
+        
+        term1, _, term2 = comparison_match.groups()
+        
+        results = {}
+        oqls = {}
+        
+        # Get class-specific status field
+        class_mapping = SmartFilterEngine.CLASS_FIELD_MAPPINGS.get(self.class_name, {})
+        status_field = class_mapping.get("status_field", "status")
+        status_values = class_mapping.get("status_values", {})
+        
+        # Execute query for each term
+        for term in [term1, term2]:
+            term_intent = intent.copy()
+            term_intent["filters"] = []
+            
+            # Map term to class-specific status values
+            if term in status_values:
+                class_status_value = status_values[term]
+                if isinstance(class_status_value, list):
+                    term_intent["filters"].append({
+                        "field": status_field,
+                        "operator": "IN",
+                        "values": class_status_value,
+                        "display_name": term
+                    })
+                else:
+                    term_intent["filters"].append({
+                        "field": status_field,
+                        "operator": "=",
+                        "value": class_status_value,
+                        "display_name": term
+                    })
+            
+            oql_query = self.build_oql_query(term_intent)
+            oqls[term] = oql_query
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": f"id,{status_field}",
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            if result.get("code") == 0:
+                count = _extract_count_from_message(result.get("message", ""))
+                if count is None:
+                    count = len(result.get("objects", {}))
+                results[term] = count
+            else:
+                results[term] = f"Error: {result.get('message')}"
+        
+        # Format results
+        output = f"**🔄 {self.class_name} Comparison: {term1.title()} vs {term2.title()}**\n\n"
+        output += f"**Query**: \"{query}\"\n\n"
+        
+        for term in [term1, term2]:
+            output += f"**OQL for {term.title()}**: `{oqls[term]}`\n"
+        output += "\n"
+        
+        for term, count in results.items():
+            if isinstance(count, int):
+                output += f"📊 **{term.title()}**: {count} {self.class_name.lower()}s\n"
+            else:
+                output += f"❌ **{term.title()}**: {count}\n"
+        
+        return output
+    
+    async def _handle_closed_vs_open_comparison(self, query: str, intent: Dict[str, Any], limit: int) -> str:
+        """Handle closed vs open/not closed comparisons - always show both counts"""
+        
+        # Get class-specific status field
+        class_mapping = SmartFilterEngine.CLASS_FIELD_MAPPINGS.get(self.class_name, {})
+        status_field = class_mapping.get("status_field", "status")
+        status_values = class_mapping.get("status_values", {})
+        
+        results = {}
+        oqls = {}
+        
+        # Handle Change requests "completed vs not completed" 
+        if self.class_name == "Change" and ("completed" in query.lower() or "complete" in query.lower()):
+            # Query 1: Completed changes (implemented or closed)
+            completed_intent = intent.copy()
+            completed_values = status_values.get("completed", ["implemented", "closed"])
+            completed_intent["filters"] = [
+                {
+                    "field": status_field,
+                    "operator": "IN",
+                    "values": completed_values,
+                    "display_name": "completed"
+                }
+            ]
+            
+            # Query 2: Not completed changes (new, approved, rejected)
+            not_completed_intent = intent.copy()
+            not_completed_values = status_values.get("not_completed", ["new", "approved", "rejected"])
+            not_completed_intent["filters"] = [
+                {
+                    "field": status_field,
+                    "operator": "IN", 
+                    "values": not_completed_values,
+                    "display_name": "not completed"
+                }
+            ]
+            
+            comparisons = [
+                ("completed", completed_intent),
+                ("not_completed", not_completed_intent)
+            ]
+        else:
+            # Standard closed vs open comparison
+            # Query 1: Closed items
+            closed_intent = intent.copy()
+            closed_intent["filters"] = [
+                {
+                    "field": status_field,
+                    "operator": "=",
+                    "value": "closed",
+                    "display_name": "closed"
+                }
+            ]
+            
+            # Query 2: Open/ongoing items (not closed)
+            open_intent = intent.copy()
+            if self.class_name == "Ticket":
+                open_intent["filters"] = [
+                    {
+                        "field": status_field,
+                        "operator": "=",
+                        "value": "ongoing",
+                        "display_name": "ongoing/open"
+                    }
+                ]
+            else:
+                # For other classes, use a more generic approach
+                open_intent["filters"] = [
+                    {
+                        "field": status_field,
+                        "operator": "!=",
+                        "value": "closed",
+                        "display_name": "not closed"
+                    }
+                ]
+            
+            comparisons = [
+                ("closed", closed_intent),
+                ("open", open_intent)
+            ]
+        
+        for term, term_intent in comparisons:
+            oql_query = self.build_oql_query(term_intent)
+            oqls[term] = oql_query
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": f"id,{status_field}",
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            if result.get("code") == 0:
+                count = _extract_count_from_message(result.get("message", ""))
+                if count is None:
+                    count = len(result.get("objects", {}))
+                results[term] = count
+            else:
+                results[term] = f"Error: {result.get('message')}"
+        
+        # Format results - always show both counts
+        if self.class_name == "Change" and ("completed" in query.lower() or "complete" in query.lower()):
+            output = f"**🔄 {self.class_name} Completion Comparison**\n\n"
+            output += f"**Query**: \"{query}\"\n\n"
+            
+            output += f"**OQL for Completed**: `{oqls.get('completed', 'N/A')}`\n"
+            output += f"**OQL for Not Completed**: `{oqls.get('not_completed', 'N/A')}`\n\n"
+            
+            completed_count = results.get('completed', 0)
+            not_completed_count = results.get('not_completed', 0)
+            
+            output += f"📊 **Completed**: {completed_count} {self.class_name.lower()}s\n"
+            output += f"� **Not Completed**: {not_completed_count} {self.class_name.lower()}s\n"
+        else:
+            output = f"**�🔄 {self.class_name} Status Comparison**\n\n"
+            output += f"**Query**: \"{query}\"\n\n"
+            
+            output += f"**OQL for Closed**: `{oqls.get('closed', 'N/A')}`\n"
+            output += f"**OQL for Open**: `{oqls.get('open', 'N/A')}`\n\n"
+            
+            closed_count = results.get('closed', 0)
+            open_count = results.get('open', 0)
+            
+            output += f"📊 **Closed**: {closed_count} {self.class_name.lower()}s\n"
+            output += f"📊 **Open/Ongoing**: {open_count} {self.class_name.lower()}s\n"
+        
+        # Calculate total for both cases
+        all_counts = [v for v in results.values() if isinstance(v, int)]
+        total = sum(all_counts)
+        if total > 0:
+            output += f"📊 **Total**: {total} {self.class_name.lower()}s\n"
+        
+        return output
+    
+    async def _handle_sla_comparison(self, query: str, intent: Dict[str, Any], limit: int) -> str:
+        """Universal SLA comparison handler"""
+        if self.class_name not in ["UserRequest", "Incident"]:
+            return f"❌ SLA comparison not supported for {self.class_name}"
+        
+        results = {}
+        oqls = {}
+        
+        # Query 1: Closed on time (status=closed AND sla_ttr_passed=no) - CORRECTED LOGIC
+        # sla_ttr_passed="no" means SLA was NOT passed/missed, i.e., closed on time
+        closed_on_time_intent = intent.copy()
+        closed_on_time_intent["filters"] = [
+            {
+                "field": "status",
+                "operator": "=",
+                "value": "closed",
+                "display_name": "closed"
+            },
+            {
+                "field": "sla_ttr_passed",
+                "operator": "=",
+                "value": "no",
+                "display_name": "SLA not missed (closed on time)"
+            }
+        ]
+        
+        # Query 2: Not closed on time (sla_ttr_passed=yes) - CORRECTED LOGIC  
+        # sla_ttr_passed="yes" means SLA was passed/missed, i.e., closed late
+        not_closed_on_time_intent = intent.copy()
+        not_closed_on_time_intent["filters"] = [
+            {
+                "field": "sla_ttr_passed",
+                "operator": "=",
+                "value": "yes",
+                "display_name": "SLA missed (closed late)"
+            }
+        ]
+        
+        comparisons = [
+            ("closed_on_time", closed_on_time_intent),
+            ("not_closed_on_time", not_closed_on_time_intent)
+        ]
+        
+        for term, term_intent in comparisons:
+            oql_query = self.build_oql_query(term_intent)
+            oqls[term] = oql_query
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": "id,status,sla_ttr_passed",
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            if result.get("code") == 0:
+                count = _extract_count_from_message(result.get("message", ""))
+                if count is None:
+                    count = len(result.get("objects", {}))
+                results[term] = count
+            else:
+                results[term] = f"Error: {result.get('message')}"
+        
+        # Format results
+        output = f"**🔄 {self.class_name} SLA Comparison: Closed On Time vs Not Closed On Time**\n\n"
+        output += f"**Query**: \"{query}\"\n\n"
+        
+        output += f"**OQL for Closed On Time**: `{oqls['closed_on_time']}`\n"
+        output += f"**OQL for Not Closed On Time**: `{oqls['not_closed_on_time']}`\n\n"
+        
+        closed_count = results.get('closed_on_time', 0)
+        not_closed_count = results.get('not_closed_on_time', 0)
+        
+        output += f"📊 **Closed On Time**: {closed_count} {self.class_name.lower()}s\n"
+        output += f"📊 **Not Closed On Time**: {not_closed_count} {self.class_name.lower()}s\n"
+        
+        return output
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Universal results formatter"""
+        if result.get("code") != 0:
+            return f"❌ **{self.class_name} Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        # Get appropriate emoji for class
+        emoji_map = {
+            "UserRequest": "🎫",
+            "Ticket": "🎫", 
+            "Change": "🔄",
+            "Incident": "🚨",
+            "Problem": "🔍"
+        }
+        emoji = emoji_map.get(self.class_name, "📋")
+        
+        output = f"**{emoji} {self.class_name} Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + f"No {self.class_name.lower()}s found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total {self.class_name}s**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects, intent)
+    
+    def _format_detailed_results(self, objects: dict, intent: Dict[str, Any]) -> str:
+        """Universal detailed results formatter"""
+        output = ""
+        
+        # Group by type if it's a generic Ticket query
+        if self.class_name == "Ticket":
+            type_groups = {}
+            for obj_key, obj_data in objects.items():
+                if obj_data.get("code") == 0:
+                    fields = obj_data.get("fields", {})
+                    ticket_type = fields.get("finalclass", "Unknown")
+                    if ticket_type not in type_groups:
+                        type_groups[ticket_type] = []
+                    type_groups[ticket_type].append((obj_key, obj_data))
+            
+            for ticket_type, tickets in type_groups.items():
+                if tickets:
+                    output += f"### {ticket_type} ({len(tickets)})\n"
+                    output += self._format_ticket_group(tickets)
+                    output += "\n"
+        else:
+            # Single class formatting
+            for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+                if obj_data.get("code") == 0:
+                    output += self._format_single_record(i, obj_key, obj_data, intent)
+        
+        return output
+    
+    def _format_ticket_group(self, tickets: list) -> str:
+        """Format a group of tickets"""
+        output = ""
+        for i, (obj_key, obj_data) in enumerate(tickets, 1):
+            output += self._format_single_record(i, obj_key, obj_data, {})
+        return output
+    
+    def _format_single_record(self, index: int, obj_key: str, obj_data: dict, intent: Dict[str, Any]) -> str:
+        """Format a single record universally"""
+        fields = obj_data.get("fields", {})
+        
+        # Get key identifiers
+        ref = fields.get("ref", obj_key)
+        title = fields.get("title", fields.get("name", fields.get("friendlyname", "No title")))
+        
+        # Get status (adapt to class)
+        status = fields.get("status", fields.get("operational_status", "Unknown"))
+        
+        output = f"{index}. **{ref}** - {title}\n"
+        output += f"   Status: {status}"
+        
+        # Add priority if available
+        if fields.get("priority"):
+            priority_emoji = {"1": "🔴", "2": "🟡", "3": "🟢", "4": "⚪"}.get(str(fields["priority"]), "")
+            output += f" | Priority: {priority_emoji} {fields['priority']}"
+        
+        # Add urgency if available
+        if fields.get("urgency"):
+            output += f" | Urgency: {fields['urgency']}"
+        
+        output += "\n"
+        
+        # Add people info
+        people_info = []
+        if fields.get("caller_name"):
+            people_info.append(f"Caller: {fields['caller_name']}")
+        if fields.get("agent_name"):
+            people_info.append(f"Agent: {fields['agent_name']}")
+        if people_info:
+            output += f"   👤 {' | '.join(people_info)}\n"
+        
+        # Add org/team info
+        org_info = []
+        if fields.get("org_name"):
+            org_info.append(f"Org: {fields['org_name']}")
+        if fields.get("team_name"):
+            org_info.append(f"Team: {fields['team_name']}")
+        if org_info:
+            output += f"   🏢 {' | '.join(org_info)}\n"
+        
+        # Add dates
+        if fields.get("start_date"):
+            output += f"   📅 Created: {fields['start_date']}\n"
+        
+        # Add SLA info if doing SLA analysis
+        if intent.get("sla_analysis"):
+            tto_passed = fields.get('sla_tto_passed', '')
+            ttr_passed = fields.get('sla_ttr_passed', '')
+            if tto_passed or ttr_passed:
+                tto_icon = '✅' if tto_passed == 'yes' else '❌' if tto_passed == 'no' else '❓'
+                ttr_icon = '✅' if ttr_passed == 'yes' else '❌' if ttr_passed == 'no' else '❓'
+                output += f"   ⏰ SLA - TTO: {tto_icon} | TTR: {ttr_icon}\n"
+        
+        # Add class-specific info
+        if self.class_name == "Change" and fields.get("outage") == "yes":
+            output += f"   ⚠️ Planned Outage: Yes\n"
+        
+        output += "\n"
+        return output
+
+# =============================================================================
+# Updated Handlers Using Smart Base
+# =============================================================================
+
+class UserRequestHandler(SmartHandlerBase):
+    """Specialized handler for UserRequest queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "UserRequest")
+        
+        # Field mappings based on docs.txt
+        self.field_mappings = {
+            # Status fields
+            "status": "status",
+            "operational_status": "operational_status", 
+            "state": "status",
+            
+            # Priority/Urgency
+            "priority": "priority",
+            "urgency": "urgency",
+            "impact": "impact",
+            
+            # People
+            "caller": "caller_name",
+            "agent": "agent_name",
+            "approver": "approver_name",
+            "user": "caller_name",
+            
+            # Organization/Team
+            "organization": "org_name",
+            "org": "org_name",
+            "team": "team_name",
+            
+            # Service
+            "service": "service_name",
+            "category": "servicesubcategory_name",
+            
+            # Dates
+            "start_date": "start_date",
+            "end_date": "end_date",
+            "close_date": "close_date",
+            "resolution_date": "resolution_date",
+            "assignment_date": "assignment_date",
+            
+            # SLA fields
+            "sla_tto_passed": "sla_tto_passed",
+            "sla_ttr_passed": "sla_ttr_passed",
+            "tto_escalation_deadline": "tto_escalation_deadline",
+            "ttr_escalation_deadline": "ttr_escalation_deadline",
+            
+            # Content
+            "title": "title",
+            "description": "description",
+            "ref": "ref",
+            "origin": "origin"
+        }
+        
+        # Status value mappings
+        self.status_values = {
+            "new": "new",
+            "assigned": "assigned", 
+            "pending": "pending",
+            "resolved": "resolved",
+            "closed": "closed",
+            "open": ["new", "assigned", "pending"],
+            "active": ["new", "assigned", "pending", "in_progress"],
+            "ongoing": ["new", "assigned", "pending", "in_progress"],
+            "escalated": ["escalated_tto", "escalated_ttr"],
+            "waiting": "waiting_for_approval",
+            "approved": "approved",
+            "rejected": "rejected",
+            "in_progress": "in_progress",
+            "awaiting_support": "awaiting_support"
+        }
+        
+        # Priority mappings
+        self.priority_values = {
+            "critical": "1",
+            "high": "2", 
+            "medium": "3",
+            "low": "4"
+        }
+        
+    async def get_schema(self) -> Dict[str, Any]:
+        """Get UserRequest schema by fetching one record with all fields"""
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": f"SELECT {self.class_name}",
+            "output_fields": "*+",
+            "limit": 1
+        }
+        
+        result = await self.client.make_request(operation)
+        
+        if result.get("code") != 0:
+            return {}
+            
+        objects = result.get("objects", {})
+        if not objects:
+            return {}
+            
+        first_obj = next(iter(objects.values()))
+        if first_obj.get("code") == 0:
+            fields = first_obj.get("fields", {})
+            return {
+                "field_names": list(fields.keys()),
+                "sample_values": {k: str(v)[:100] if v else "" for k, v in fields.items()},
+                "total_fields": len(fields)
+            }
+        
+        return {}
+    
+    def parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse natural language query for UserRequest-specific intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",  # list, count, stats
+            "filters": [],
+            "grouping": None,
+            "time_analysis": False,
+            "sla_analysis": False,
+            "comparison": False,
+            "ordering": None  # Added for latest/newest ordering
+        }
+        
+        # Detect action type
+        if any(word in query_lower for word in ["count", "how many", "number of", "total count"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["stats", "statistics", "breakdown", "by status", "group by"]):
+            intent["action"] = "stats"
+        elif any(word in query_lower for word in ["compare", "vs", "versus", "v/s"]):
+            intent["action"] = "compare"
+            intent["comparison"] = True
+        
+        # Detect SLA-related queries
+        if any(word in query_lower for word in ["sla", "on time", "late", "overdue", "deadline", "closed on time", "not closed on time"]):
+            intent["sla_analysis"] = True
+            intent["time_analysis"] = True
+        
+        # Detect ordering requirements
+        if "latest" in query_lower or "newest" in query_lower or "recent" in query_lower:
+            intent["ordering"] = "start_date DESC"
+        
+        # Extract filters
+        filters = self._extract_filters(query_lower)
+        intent["filters"] = filters
+        
+        # Detect grouping using smart engine
+        intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
+        
+        return intent
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract filters from query using universal filter engine"""
+        # Use the universal filter engine for consistent filtering across all classes
+        return SmartFilterEngine.extract_filters(query_lower, self.class_name)
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for UserRequests using smart query builder"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine which fields to return based on query intent"""
+        if intent["action"] == "count":
+            if intent["grouping"]:
+                return f"id,{intent['grouping']}"
+            else:
+                return "id"
+        
+        # For detailed queries, return key fields
+        key_fields = [
+            "id", "ref", "title", "status", "priority", "urgency",
+            "caller_name", "agent_name", "org_name", "team_name",
+            "start_date", "resolution_date", "close_date"
+        ]
+        
+        # Add SLA fields if doing SLA analysis
+        if intent["sla_analysis"]:
+            sla_fields = [
+                "sla_tto_passed", "sla_ttr_passed", 
+                "tto_escalation_deadline", "ttr_escalation_deadline"
+            ]
+            key_fields.extend(sla_fields)
+        
+        return ",".join(key_fields)
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Main entry point for processing UserRequest queries"""
+        try:
+            # Parse query intent
+            intent = self.parse_query_intent(query)
+            
+            # Handle comparison queries (e.g., "closed vs open")
+            if intent["comparison"]:
+                return await self._handle_comparison_query(query, intent, limit)
+            
+            # Build OQL query
+            oql_query = self.build_oql_query(intent)
+            output_fields = self.determine_output_fields(intent)
+            
+            # Execute query
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": output_fields,
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            if result.get("code") != 0:
+                return f"❌ **Query Error**: {result.get('message', 'Unknown error')}"
+            
+            # Format results
+            return self._format_results(result, intent, query, oql_query)
+            
+        except Exception as e:
+            return f"❌ **UserRequest Query Error**: {str(e)}"
+    
+
+    
+
+
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Universal results formatter"""
+        if result.get("code") != 0:
+            return f"❌ **{self.class_name} Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        # Get appropriate emoji for class
+        emoji_map = {
+            "UserRequest": "🎫",
+            "Ticket": "🎫", 
+            "Change": "🔄",
+            "Incident": "🚨",
+            "Problem": "🔍"
+        }
+        emoji = emoji_map.get(self.class_name, "📋")
+        
+        output = f"**{emoji} {self.class_name} Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + f"No {self.class_name.lower()}s found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total {self.class_name}s**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects, intent)
+    
+    def _format_detailed_results(self, objects: dict, intent: Dict[str, Any]) -> str:
+        """Universal detailed results formatter"""
+        output = ""
+        
+        # Group by type if it's a generic Ticket query
+        if self.class_name == "Ticket":
+            type_groups = {}
+            for obj_key, obj_data in objects.items():
+                if obj_data.get("code") == 0:
+                    fields = obj_data.get("fields", {})
+                    ticket_type = fields.get("finalclass", "Unknown")
+                    if ticket_type not in type_groups:
+                        type_groups[ticket_type] = []
+                    type_groups[ticket_type].append((obj_key, obj_data))
+            
+            for ticket_type, tickets in type_groups.items():
+                if tickets:
+                    output += f"### {ticket_type} ({len(tickets)})\n"
+                    output += self._format_ticket_group(tickets)
+                    output += "\n"
+        else:
+            # Single class formatting
+            for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+                if obj_data.get("code") == 0:
+                    output += self._format_single_record(i, obj_key, obj_data, intent)
+        
+        return output
+    
+    def _format_ticket_group(self, tickets: list) -> str:
+        """Format a group of tickets"""
+        output = ""
+        for i, (obj_key, obj_data) in enumerate(tickets, 1):
+            output += self._format_single_record(i, obj_key, obj_data, {})
+        return output
+    
+    def _format_single_record(self, index: int, obj_key: str, obj_data: dict, intent: Dict[str, Any]) -> str:
+        """Format a single record universally"""
+        fields = obj_data.get("fields", {})
+        
+        # Get key identifiers
+        ref = fields.get("ref", obj_key)
+        title = fields.get("title", fields.get("name", fields.get("friendlyname", "No title")))
+        
+        # Get status (adapt to class)
+        status = fields.get("status", fields.get("operational_status", "Unknown"))
+        
+        output = f"{index}. **{ref}** - {title}\n"
+        output += f"   Status: {status}"
+        
+        # Add priority if available
+        if fields.get("priority"):
+            priority_emoji = {"1": "🔴", "2": "🟡", "3": "🟢", "4": "⚪"}.get(str(fields["priority"]), "")
+            output += f" | Priority: {priority_emoji} {fields['priority']}"
+        
+        # Add urgency if available
+        if fields.get("urgency"):
+            output += f" | Urgency: {fields['urgency']}"
+        
+        output += "\n"
+        
+        # Add people info
+        people_info = []
+        if fields.get("caller_name"):
+            people_info.append(f"Caller: {fields['caller_name']}")
+        if fields.get("agent_name"):
+            people_info.append(f"Agent: {fields['agent_name']}")
+        if people_info:
+            output += f"   👤 {' | '.join(people_info)}\n"
+        
+        # Add org/team info
+        org_info = []
+        if fields.get("org_name"):
+            org_info.append(f"Org: {fields['org_name']}")
+        if fields.get("team_name"):
+            org_info.append(f"Team: {fields['team_name']}")
+        if org_info:
+            output += f"   🏢 {' | '.join(org_info)}\n"
+        
+        # Add dates
+        if fields.get("start_date"):
+            output += f"   📅 Created: {fields['start_date']}\n"
+        
+        # Add SLA info if doing SLA analysis
+        if intent.get("sla_analysis"):
+            tto_passed = fields.get('sla_tto_passed', '')
+            ttr_passed = fields.get('sla_ttr_passed', '')
+            if tto_passed or ttr_passed:
+                tto_icon = '✅' if tto_passed == 'yes' else '❌' if tto_passed == 'no' else '❓'
+                ttr_icon = '✅' if ttr_passed == 'yes' else '❌' if ttr_passed == 'no' else '❓'
+                output += f"   ⏰ SLA - TTO: {tto_icon} | TTR: {ttr_icon}\n"
+        
+        # Add class-specific info
+        if self.class_name == "Change" and fields.get("outage") == "yes":
+            output += f"   ⚠️ Planned Outage: Yes\n"
+        
+        output += "\n"
+        return output
+
+class TicketHandler(SmartHandlerBase):
+    """Specialized handler for generic Ticket queries - covers all ticket types"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Ticket")
+        self.schema_fields = {
+            # Core ticket fields from documentation
+            "ref": "Ticket reference",
+            "title": "Ticket title",
+            "description": "Ticket description", 
+            "operational_status": "Status (ongoing/resolved/closed)",
+            "start_date": "Start date",
+            "end_date": "End date",
+            "close_date": "Close date",
+            "last_update": "Last update",
+            
+            # People and teams
+            "org_name": "Organization",
+            "caller_name": "Caller",
+            "team_name": "Team",
+            "agent_name": "Agent",
+            
+            # Sub-class identification
+            "finalclass": "Ticket type (UserRequest/Change/Incident/Problem)",
+            "friendlyname": "Display name"
+        }
+    
+    def parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse query intent for tickets"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org"]):
+            intent["action"] = "group"
+            intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
+        
+        # Add filters using smart engine
+        intent["filters"] = SmartFilterEngine.extract_filters(query_lower, self.class_name)
+        
+        return intent
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for tickets using smart query builder"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields"""
+        if intent["action"] == "count":
+            if intent["grouping"]:
+                return f"id,{intent['grouping']}"
+            else:
+                return "id"
+        
+        # Return all fields for detailed view since Ticket covers multiple classes
+        return "*+"
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process ticket query with multi-class awareness"""
+        query_lower = query.lower()
+        
+        # SPECIAL HANDLING: If query mentions "critical" tickets, delegate to UserRequest 
+        # since Ticket class doesn't have priority field but UserRequest does
+        if "critical" in query_lower and ("ticket" in query_lower or "tickets" in query_lower):
+            user_request_handler = UserRequestHandler(self.client)
+            modified_query = query.replace("ticket", "user request").replace("tickets", "user requests")
+            result = await user_request_handler.process_query(modified_query, limit)
+            # Update the result header to reflect it's showing UserRequests (which are tickets)
+            result = result.replace("UserRequest Query Results", "Critical Ticket Query Results (UserRequests)")
+            result += f"\n**Note**: Showing UserRequests since generic Ticket class doesn't have priority field. Other ticket types (Incident, Problem, Change) would need separate queries."
+            return result
+        
+        # Handle SLA comparison queries specifically for tickets
+        if ("closed" in query_lower and "time" in query_lower and 
+            any(comp_word in query_lower for comp_word in ["vs", "versus", "compared to", "comparison"])):
+            return await self._handle_ticket_sla_comparison(query, limit)
+        
+        intent = self._parse_query_intent(query)
+        
+        # Build OQL query
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        # Execute query
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    async def _handle_ticket_sla_comparison(self, query: str, limit: int) -> str:
+        """Handle SLA comparison queries for all ticket types"""
+        
+        # Query 1: Closed tickets (all types)
+        closed_operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": "SELECT Ticket WHERE operational_status = 'closed'",
+            "output_fields": "id,operational_status,finalclass",
+            "limit": limit
+        }
+        
+        # Query 2: Open/ongoing tickets (all types)  
+        open_operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": "SELECT Ticket WHERE operational_status = 'ongoing'",
+            "output_fields": "id,operational_status,finalclass",
+            "limit": limit
+        }
+        
+        # Execute both queries
+        closed_result = await self.client.make_request(closed_operation)
+        open_result = await self.client.make_request(open_operation)
+        
+        output = f"**🔄 Ticket Status Comparison**\n\n"
+        output += f"**Query**: \"{query}\"\n\n"
+        
+        # Process closed tickets
+        if closed_result.get("code") == 0:
+            closed_count = _extract_count_from_message(closed_result.get("message", ""))
+            if closed_count is None:
+                closed_count = len(closed_result.get("objects", {}))
+        else:
+            closed_count = f"Error: {closed_result.get('message', 'Unknown error')}"
+        
+        # Process open tickets
+        if open_result.get("code") == 0:
+            open_count = _extract_count_from_message(open_result.get("message", ""))
+            if open_count is None:
+                open_count = len(open_result.get("objects", {}))
+        else:
+            open_count = f"Error: {open_result.get('message', 'Unknown error')}"
+        
+        output += f"📊 **Closed Tickets**: {closed_count}\n"
+        output += f"📊 **Open Tickets**: {open_count}\n\n"
+        
+        return output
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse query intent for tickets"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org"]):
+            intent["action"] = "group"
+            intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
+        
+        # Add filters using smart engine
+        intent["filters"] = SmartFilterEngine.extract_filters(query_lower, self.class_name)
+        
+        return intent
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract filters from query using smart filter engine"""
+        return SmartFilterEngine.extract_filters(query_lower, self.class_name)
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format ticket results with multi-class awareness"""
+        if result.get("code") != 0:
+            return f"❌ **Ticket Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🎫 Ticket Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No tickets found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Tickets**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed ticket results"""
+        output = ""
+        
+        # Group by ticket type for better organization
+        type_groups = {}
+        for obj_key, obj_data in objects.items():
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                ticket_type = fields.get("finalclass", "Unknown")
+                if ticket_type not in type_groups:
+                    type_groups[ticket_type] = []
+                type_groups[ticket_type].append((obj_key, obj_data))
+        
+        for ticket_type, tickets in type_groups.items():
+            if tickets:
+                output += f"### {ticket_type} ({len(tickets)})\n"
+                
+                for i, (obj_key, obj_data) in enumerate(tickets, 1):
+                    fields = obj_data.get("fields", {})
+                    
+                    ref = fields.get("ref", obj_key)
+                    title = fields.get("title", "No title")
+                    status = fields.get("operational_status", "Unknown")
+                    
+                    output += f"{i}. **{ref}** - {title}\n"
+                    output += f"   Status: {status}\n"
+                    
+                    if fields.get("caller_name"):
+                        output += f"   Caller: {fields['caller_name']}\n"
+                    if fields.get("org_name"):
+                        output += f"   Organization: {fields['org_name']}\n"
+                    if fields.get("agent_name"):
+                        output += f"   Agent: {fields['agent_name']}\n"
+                    
+                    output += "\n"
+                
+                output += "\n"
+        
+        return output
+
+class ChangeHandler(SmartHandlerBase):
+    """Specialized handler for Change requests and their subtypes"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Change")
+        self.schema_fields = {
+            # Inherited from Ticket
+            "ref": "Change reference",
+            "title": "Change title", 
+            "description": "Change description",
+            "operational_status": "Operational status",
+            "status": "Change status (new/validated/approved/implemented/closed)",
+            
+            # Change-specific fields
+            "creation_date": "Creation date",
+            "impact": "Impact description",
+            "outage": "Planned outage (yes/no)",
+            "fallback": "Fallback plan",
+            "reason": "Rejection reason",
+            
+            # People involved
+            "caller_name": "Caller",
+            "requestor_id": "Requestor", 
+            "supervisor_group_name": "Supervisor team",
+            "supervisor_id": "Supervisor",
+            "manager_group_name": "Manager team",
+            "manager_id": "Manager",
+            "agent_name": "Assigned agent",
+            
+            # Relationships
+            "parent_name": "Parent change",
+            "related_request_list": "Related user requests",
+            "related_incident_list": "Related incidents", 
+            "related_problems_list": "Related problems",
+            "child_changes_list": "Child changes",
+            
+            # Sub-class info
+            "finalclass": "Change type (NormalChange/EmergencyChange/RoutineChange)"
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process change query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse change query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = SmartGroupingEngine.detect_grouping(query_lower, self.class_name)
+        
+        intent["filters"] = SmartFilterEngine.extract_filters(query_lower, self.class_name)
+        return intent
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for changes using smart query builder"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for changes"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        
+        # Return comprehensive fields for changes
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format change results"""
+        if result.get("code") != 0:
+            return f"❌ **Change Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🔄 Change Request Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No change requests found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Changes**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed change results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                ref = fields.get("ref", obj_key)
+                title = fields.get("title", "No title")
+                status = fields.get("status", "Unknown")
+                change_type = fields.get("finalclass", "Change")
+                
+                output += f"{i}. **{ref}** - {title}\n"
+                output += f"   Type: {change_type}\n"
+                output += f"   Status: {status}\n"
+                output += f"   Operational Status: {fields.get('operational_status', 'Unknown')}\n"
+                
+                if fields.get("caller_name"):
+                    output += f"   Caller: {fields['caller_name']}\n"
+                if fields.get("org_name"):
+                    output += f"   Organization: {fields['org_name']}\n"
+                if fields.get("creation_date"):
+                    output += f"   Created: {fields['creation_date']}\n"
+                if fields.get("outage") == "yes":
+                    output += f"   ⚠️ Planned Outage: Yes\n"
+                if fields.get("impact"):
+                    output += f"   Impact: {fields['impact']}\n"
+                
+                output += "\n"
+        
+        return output
+
+class IncidentHandler(SmartHandlerBase):
+    """Specialized handler for Incident tickets"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Incident")
+        self.schema_fields = {
+            # Inherited from Ticket
+            "ref": "Incident reference",
+            "title": "Incident title",
+            "description": "Incident description",
+            "operational_status": "Operational status",
+            "status": "Incident status (new/assigned/resolved/closed)",
+            
+            # Incident-specific fields
+            "priority": "Priority (1-4)",
+            "urgency": "Urgency (1-4)", 
+            "impact": "Impact (1-3)",
+            "service_name": "Affected service",
+            "servicesubcategory_name": "Service subcategory",
+            "assignment_date": "Assignment date",
+            "resolution_date": "Resolution date",
+            "resolution_code": "Resolution code",
+            "solution": "Solution description",
+            "time_spent": "Time spent on resolution",
+            "user_satisfaction": "User satisfaction (1-4)",
+            "category": "Category (operational/security)",
+            "source": "Source (opensearch/wazuh/zabbix)",
+            
+            # People
+            "caller_name": "Caller",
+            "agent_name": "Assigned agent",
+            "org_name": "Organization",
+            "team_name": "Team",
+            
+            # Relationships
+            "parent_incident_id": "Parent incident",
+            "parent_problem_id": "Parent problem",
+            "parent_change_id": "Parent change",
+            "related_request_list": "Related user requests",
+            "child_incidents_list": "Child incidents"
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process incident query with error handling for missing class"""
+        try:
+            intent = self._parse_query_intent(query)
+            
+            oql_query = self.build_oql_query(intent)
+            output_fields = self.determine_output_fields(intent)
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": output_fields,
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            # Check if class doesn't exist
+            if result.get("code") != 0:
+                error_msg = result.get("message", "Unknown error")
+                if "unknown class" in error_msg.lower() or "class not found" in error_msg.lower():
+                    return f"⚠️ **Incident Class Not Available**: The Incident class may not be configured in your iTop instance.\n\n**Error**: {error_msg}\n\n**Suggestion**: Use the generic Ticket handler instead by searching for 'tickets' or contact your iTop administrator to configure the Incident class."
+                return f"❌ **Incident Query Error**: {error_msg}"
+            
+            return self._format_results(result, intent, query, oql_query)
+            
+        except Exception as e:
+            return f"❌ **Incident Handler Error**: {str(e)}"
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse incident query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary", "organization wise", "org wise", "by organization", "by org"]):
+            intent["action"] = "group"
+            if "priority" in query_lower:
+                intent["grouping"] = "priority"
+            elif "status" in query_lower:
+                intent["grouping"] = "status"
+            elif "category" in query_lower:
+                intent["grouping"] = "category"
+            elif "source" in query_lower:
+                intent["grouping"] = "source"
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract incident-specific filters using universal filter engine"""
+        # Use the universal filter engine for consistent filtering across all classes
+        return SmartFilterEngine.extract_filters(query_lower, self.class_name)
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for incidents"""
+        base_query = f"SELECT {self.class_name}"
+        conditions = []
+        
+        for filter_info in intent["filters"]:
+            field = filter_info["field"]
+            operator = filter_info["operator"]
+            value = filter_info["value"]
+            
+            if operator in ["=", "!=", ">", "<", ">=", "<="]:
+                conditions.append(f"{field} {operator} '{value}'")
+        
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+        
+        return base_query
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for incidents"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format incident results"""
+        if result.get("code") != 0:
+            return f"❌ **Incident Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🚨 Incident Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent.get("filters"):
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No incidents found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Incidents**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + self._format_grouped_results(objects, intent["grouping"])
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_grouped_results(self, objects: dict, group_field: str) -> str:
+        """Format grouped incident results - Fixed"""
+        if not objects:
+            return f"**No data to group by {group_field}**\n"
+            
+        groups = {}
+        for obj_data in objects.values():
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                group_value = fields.get(group_field, "Unknown")
+                groups[group_value] = groups.get(group_value, 0) + 1
+        
+        output = f"**Breakdown by {group_field}:**\n"
+        for group, count in sorted(groups.items()):
+            output += f"- {group}: {count}\n"
+        
+        return output
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed incident results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                ref = fields.get("ref", obj_key)
+                title = fields.get("title", "No title")
+                status = fields.get("status", "Unknown")
+                priority = fields.get("priority", "Unknown")
+                
+                output += f"{i}. **{ref}** - {title}\n"
+                output += f"   Status: {status} | Priority: {priority}\n"
+                
+                if fields.get("category"):
+                    output += f"   Category: {fields['category']}\n"
+                if fields.get("caller_name"):
+                    output += f"   Caller: {fields['caller_name']}\n"
+                if fields.get("agent_name"):
+                    output += f"   Agent: {fields['agent_name']}\n"
+                if fields.get("source"):
+                    output += f"   Source: {fields['source']}\n"
+                
+                output += "\n"
+        
+        return output
+
+class ProblemHandler(SmartHandlerBase):
+    """Specialized handler for Problem tickets"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Problem")
+        self.schema_fields = {
+            # Inherited from Ticket
+            "ref": "Problem reference",
+            "title": "Problem title",
+            "description": "Problem description",
+            "operational_status": "Operational status",
+            "status": "Problem status (new/assigned/resolved/closed)",
+            
+            # Problem-specific fields
+            "priority": "Priority (1-4)",
+            "urgency": "Urgency (1-4)",
+            "impact": "Impact (1-3)",
+            "service_name": "Affected service",
+            "servicesubcategory_name": "Service subcategory",
+            "product": "Product",
+            "assignment_date": "Assignment date",
+            "resolution_date": "Resolution date",
+            
+            # People
+            "caller_name": "Caller",
+            "agent_name": "Assigned agent",
+            "org_name": "Organization",
+            "team_name": "Team",
+            
+            # Relationships
+            "related_change_id": "Related change",
+            "knownerrors_list": "Known errors",
+            "related_request_list": "Related user requests", 
+            "related_incident_list": "Related incidents"
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process problem query with error handling for missing class"""
+        try:
+            intent = self._parse_query_intent(query)
+            
+            oql_query = self.build_oql_query(intent)
+            output_fields = self.determine_output_fields(intent)
+            
+            operation = {
+                "operation": "core/get",
+                "class": self.class_name,
+                "key": oql_query,
+                "output_fields": output_fields,
+                "limit": limit
+            }
+            
+            result = await self.client.make_request(operation)
+            
+            # Check if class doesn't exist
+            if result.get("code") != 0:
+                error_msg = result.get("message", "Unknown error")
+                if "unknown class" in error_msg.lower() or "class not found" in error_msg.lower():
+                    return f"⚠️ **Problem Class Not Available**: The Problem class may not be configured in your iTop instance.\n\n**Error**: {error_msg}\n\n**Suggestion**: Use the generic Ticket handler instead by searching for 'tickets' or contact your iTop administrator to configure the Problem class."
+                return f"❌ **Problem Query Error**: {error_msg}"
+            
+            return self._format_results(result, intent, query, oql_query)
+            
+        except Exception as e:
+            return f"❌ **Problem Handler Error**: {str(e)}"
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse problem query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            if "priority" in query_lower:
+                intent["grouping"] = "priority"
+            elif "status" in query_lower:
+                intent["grouping"] = "status"
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract problem-specific filters using universal filter engine"""
+        # Use the universal filter engine for consistent filtering across all classes
+        return SmartFilterEngine.extract_filters(query_lower, self.class_name)
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for problems"""
+        base_query = f"SELECT {self.class_name}"
+        conditions = []
+        
+        for filter_info in intent["filters"]:
+            field = filter_info["field"]
+            operator = filter_info["operator"]
+            value = filter_info["value"]
+            
+            if operator in ["=", "!=", ">", "<", ">=", "<="]:
+                conditions.append(f"{field} {operator} '{value}'")
+        
+        if conditions:
+            base_query += " WHERE " + " AND ".join(conditions)
+        
+        return base_query
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for problems"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format problem results"""
+        if result.get("code") != 0:
+            return f"❌ **Problem Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🔍 Problem Analysis Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"] if f and isinstance(f, dict)]
+            if filter_descriptions:
+                output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No problems found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Problems**: {total_count or (len(objects) if objects else 0)}"
+        elif intent["action"] == "group":
+            return output + self._format_grouped_results(objects, intent["grouping"])
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_grouped_results(self, objects: dict, group_field: str) -> str:
+        """Format grouped problem results"""
+        if not objects:
+            return f"**No data to group by {group_field}**\n"
+            
+        groups = {}
+        for obj_data in objects.values():
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                group_value = fields.get(group_field, "Unknown")
+                groups[group_value] = groups.get(group_value, 0) + 1
+        
+        output = f"**Breakdown by {group_field}:**\n"
+        for group, count in sorted(groups.items()):
+            output += f"- {group}: {count}\n"
+        
+        return output
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed problem results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                ref = fields.get("ref", obj_key)
+                title = fields.get("title", "No title")
+                status = fields.get("status", "Unknown")
+                priority = fields.get("priority", "Unknown")
+                
+                # Priority emoji mapping
+                priority_emoji = {"1": "🔴", "2": "🟡", "3": "🟢", "4": "⚪"}.get(str(priority), "")
+                
+                output += f"{i}. **{ref}** - {title}\n"
+                output += f"   Status: {status}\n"
+                output += f"   Priority: {priority_emoji} {priority}\n"
+                
+                if fields.get("urgency"):
+                    output += f"   Urgency: {fields['urgency']}\n"
+                if fields.get("impact"):
+                    output += f"   Impact: {fields['impact']}\n"
+                if fields.get("caller_name"):
+                    output += f"   Caller: {fields['caller_name']}\n"
+                if fields.get("agent_name"):
+                    output += f"   Agent: {fields['agent_name']}\n"
+                if fields.get("service_name"):
+                    output += f"   Service: {fields['service_name']}\n"
+                if fields.get("product"):
+                    output += f"   Product: {fields['product']}\n"
+                
+                output += "\n"
+        
+        return output
+
+class PCHandler(SmartHandlerBase):
+    """Handler for PC (Personal Computer) queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "PC")
+        
+        # Field mappings based on docs.txt
+        self.field_mappings = {
+            # Core fields
+            "name": "name",
+            "description": "description",
+            "organization": "org_name",
+            "org": "org_name",
+            
+            # Status and lifecycle
+            "status": "status",  # stock/implementation/production/obsolete
+            "business_criticality": "business_criticity",  # critical/high/medium/low
+            "move_to_production": "move2production",
+            
+            # Hardware details
+            "serial_number": "serialnumber",
+            "brand": "brand_name",
+            "model": "model_name",
+            "asset_number": "asset_number",
+            "cpu": "cpu",
+            "ram": "ram",
+            "type": "type",  # desktop/laptop
+            
+            # Location and ownership relationships
+            "location": "location_name",
+            "user": "user_friendlyname",  # Person assigned to PC
+            "owner": "owner_friendlyname",  # Team that owns the PC
+            "contingency": "contingency_friendlyname",  # Backup PC
+            
+            # OS information (detailed)
+            "os_family": "osfamily_name",
+            "os_version": "osversion_name", 
+            "os_license": "oslicence_name",
+            "os_comment": "ocs_oscomment",
+            
+            # Security ratings
+            "confidentiality": "confidentiality",  # 1-4
+            "integrity": "integrity",  # 1-4  
+            "availability": "availability",  # 1-4
+            "score": "score",
+            "cvss": "cvss",
+            
+            # Dates
+            "purchase_date": "purchase_date",
+            "warranty_end": "end_of_warranty",
+            
+            # Network and relationships
+            "contacts": "contacts_list",
+            "softwares": "softwares_list",
+            "tickets": "tickets_list",
+        }
+        
+        # Status values
+        self.status_values = {
+            "stock": "stock",
+            "implementation": "implementation", 
+            "production": "production",
+            "obsolete": "obsolete",
+            "active": ["stock", "implementation", "production"],
+            "inactive": "obsolete"
+        }
+        
+        # Business criticality values
+        self.criticality_values = {
+            "critical": "critical",
+            "high": "high",
+            "medium": "medium", 
+            "low": "low"
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process PC query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse PC query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        # Determine action
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping field for PCs"""
+        if "by status" in query_lower:
+            return "status"
+        elif "by type" in query_lower:
+            return "type"
+        elif "by organization" in query_lower or "by org" in query_lower:
+            return "org_name"
+        elif "by location" in query_lower:
+            return "location_name"
+        elif "by brand" in query_lower:
+            return "brand_name"
+        elif "by os" in query_lower or "by operating system" in query_lower:
+            return "osfamily_name"
+        elif "by criticality" in query_lower:
+            return "business_criticity"
+        elif "by user" in query_lower:
+            return "user_friendlyname"
+        elif "by owner" in query_lower or "by team" in query_lower:
+            return "owner_friendlyname"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract PC-specific filters"""
+        filters = []
+        
+        # Status filters
+        for status_term, status_value in self.status_values.items():
+            if status_term in query_lower:
+                if isinstance(status_value, list):
+                    filters.append({
+                        "field": "status",
+                        "operator": "IN",
+                        "values": status_value,
+                        "display_name": f"{status_term} status"
+                    })
+                else:
+                    filters.append({
+                        "field": "status",
+                        "operator": "=",
+                        "value": status_value,
+                        "display_name": f"{status_term} status"
+                    })
+        
+        # PC type filters
+        if "desktop" in query_lower:
+            filters.append({
+                "field": "type",
+                "operator": "=",
+                "value": "desktop",
+                "display_name": "desktop PCs"
+            })
+        elif "laptop" in query_lower:
+            filters.append({
+                "field": "type",
+                "operator": "=",
+                "value": "laptop", 
+                "display_name": "laptop PCs"
+            })
+        
+        # Criticality filters - DYNAMIC: Handle any combination of criticality values
+        found_criticalities = []
+        for crit_term, crit_value in self.criticality_values.items():
+            if crit_term in query_lower:
+                found_criticalities.append((crit_term, crit_value))
+        
+        if len(found_criticalities) == 1:
+            # Single criticality
+            crit_term, crit_value = found_criticalities[0]
+            filters.append({
+                "field": "business_criticity",
+                "operator": "=",
+                "value": crit_value,
+                "display_name": f"{crit_term} criticality"
+            })
+        elif len(found_criticalities) > 1:
+            # Multiple criticalities - use IN operator for OR logic
+            unique_values = list(set([crit_value for _, crit_value in found_criticalities]))
+            unique_terms = list(set([crit_term for crit_term, _ in found_criticalities]))
+            
+            if len(unique_values) == 1:
+                # Multiple terms mapping to same criticality value
+                filters.append({
+                    "field": "business_criticity",
+                    "operator": "=",
+                    "value": unique_values[0],
+                    "display_name": f"{'/'.join(unique_terms)} criticality"
+                })
+            else:
+                # Multiple different criticalities - support any combination
+                filters.append({
+                    "field": "business_criticity",
+                    "operator": "IN",
+                    "values": unique_values,
+                    "display_name": f"{'/'.join(unique_terms)} criticality"
+                })
+        
+        # Organization filters
+        org_match = re.search(r'organization ["\']([^"\']+)["\']', query_lower)
+        if org_match:
+            org_name = org_match.group(1)
+            filters.append({
+                "field": "org_name",
+                "operator": "LIKE",
+                "value": f"%{org_name}%",
+                "display_name": f"organization contains '{org_name}'"
+            })
+        
+        # Location filters
+        if "location" in query_lower:
+            location_match = re.search(r'location ["\']([^"\']+)["\']', query_lower)
+            if location_match:
+                location_name = location_match.group(1)
+                filters.append({
+                    "field": "location_name",
+                    "operator": "LIKE",
+                    "value": f"%{location_name}%",
+                    "display_name": f"location contains '{location_name}'"
+                })
+        
+        # User assignment filters (who uses the PC)
+        if "user" in query_lower:
+            user_match = re.search(r'user ["\']([^"\']+)["\']', query_lower)
+            if user_match:
+                user_name = user_match.group(1)
+                filters.append({
+                    "field": "user_friendlyname",
+                    "operator": "LIKE",
+                    "value": f"%{user_name}%",
+                    "display_name": f"user contains '{user_name}'"
+                })
+        
+        # Owner/Team filters (which team owns the PC)
+        if "owner" in query_lower or "team" in query_lower:
+            owner_match = re.search(r'(?:owner|team) ["\']([^"\']+)["\']', query_lower)
+            if owner_match:
+                owner_name = owner_match.group(1)
+                filters.append({
+                    "field": "owner_friendlyname",
+                    "operator": "LIKE",
+                    "value": f"%{owner_name}%",
+                    "display_name": f"owner team contains '{owner_name}'"
+                })
+        
+        # OS filters
+        if "windows" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Windows%",
+                "display_name": "Windows OS"
+            })
+        elif "linux" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Linux%",
+                "display_name": "Linux OS"
+            })
+        elif "mac" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Mac%",
+                "display_name": "Mac OS"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for PCs"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for PCs"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format PC results"""
+        if result.get("code") != 0:
+            return f"❌ **PC Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**💻 PC Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No PCs found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total PCs**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed PC results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                pc_type = fields.get("type", "Unknown")
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}** ({pc_type})\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("user_friendlyname"):
+                    output += f"   👤 Assigned User: {fields['user_friendlyname']}\n"
+                if fields.get("owner_friendlyname"):
+                    output += f"   👥 Owner Team: {fields['owner_friendlyname']}\n"
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("location_name"):
+                    output += f"   📍 Location: {fields['location_name']}\n"
+                if fields.get("cpu"):
+                    output += f"   🖥️ CPU: {fields['cpu']}\n"
+                if fields.get("ram"):
+                    output += f"   💾 RAM: {fields['ram']}\n"
+                if fields.get("osfamily_name"):
+                    os_display = fields['osfamily_name']
+                    if fields.get("osversion_name"):
+                        os_display += f" ({fields['osversion_name']})"
+                    output += f"   💿 OS: {os_display}\n"
+                if fields.get("oslicence_name"):
+                    output += f"   📄 OS License: {fields['oslicence_name']}\n"
+                if fields.get("business_criticity"):
+                    crit_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢", "low": "⚪"}.get(fields["business_criticity"], "")
+                    output += f"   📊 Criticality: {crit_emoji} {fields['business_criticity']}\n"
+                if fields.get("serialnumber"):
+                    output += f"   🔢 Serial: {fields['serialnumber']}\n"
+                if fields.get("asset_number"):
+                    output += f"   🏷️ Asset #: {fields['asset_number']}\n"
+                
+                output += "\n"
+        
+        return output
+
+
+class ServerHandler(SmartHandlerBase):
+    """Handler for Server queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Server")
+        
+        self.field_mappings = {
+            # Core fields  
+            "name": "name",
+            "description": "description",
+            "organization": "org_name",
+            "status": "status",
+            "business_criticality": "business_criticity",
+            
+            # Hardware and location
+            "serial_number": "serialnumber", 
+            "brand": "brand_name",
+            "model": "model_name",
+            "cpu": "cpu",
+            "ram": "ram",
+            "asset_number": "asset_number",
+            
+            # Datacenter placement
+            "rack": "rack_name",
+            "enclosure": "enclosure_name",
+            "location": "location_name",
+            "rack_units": "nb_u",
+            
+            # OS information
+            "os_family": "osfamily_name",
+            "os_version": "osversion_name", 
+            "os_license": "oslicence_name",
+            "os_comment": "ocs_oscomment",
+            
+            # Network
+            "management_ip": "managementip",
+            
+            # Power connections
+            "power_a": "powerA_name",
+            "power_b": "powerB_name",
+            
+            # Security
+            "confidentiality": "confidentiality",
+            "integrity": "integrity",
+            "availability": "availability",
+            "cvss": "cvss",
+            
+            # Ownership and relationships
+            "owner": "owner_friendlyname",  # Team that owns the server
+            "custodians": "custodian_list",  # People responsible for the server
+            "contingency": "contingency_friendlyname",  # Backup server
+            
+            # Related objects
+            "contacts": "contacts_list",
+            "softwares": "softwares_list",
+            "tickets": "tickets_list",
+            "logical_volumes": "logicalvolumes_list",
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process server query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse server query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": [],
+            "focus": "server"  # Default focus
+        }
+        
+        # Detect if query is specifically about software/applications
+        if any(word in query_lower for word in ["software", "application", "applications", "installed", "softwares"]):
+            intent["focus"] = "software"
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for servers"""
+        if "by status" in query_lower:
+            return "status"
+        elif "by organization" in query_lower:
+            return "org_name"
+        elif "by location" in query_lower:
+            return "location_name"
+        elif "by rack" in query_lower:
+            return "rack_name"
+        elif "by os" in query_lower:
+            return "osfamily_name"
+        elif "by criticality" in query_lower:
+            return "business_criticity"
+        elif "by owner" in query_lower or "by team" in query_lower:
+            return "owner_friendlyname"
+        elif "by brand" in query_lower:
+            return "brand_name"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract server-specific filters"""
+        filters = []
+        
+        # Status filters
+        if "production" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "production",
+                "display_name": "production servers"
+            })
+        elif "implementation" in query_lower:
+            filters.append({
+                "field": "status", 
+                "operator": "=",
+                "value": "implementation",
+                "display_name": "implementation servers"
+            })
+        
+        # Criticality filters
+        if "critical" in query_lower:
+            filters.append({
+                "field": "business_criticity",
+                "operator": "=",
+                "value": "critical",
+                "display_name": "critical servers"
+            })
+        
+        # Owner/Team filters
+        if "owner" in query_lower or "team" in query_lower:
+            owner_match = re.search(r'(?:owner|team) ["\']([^"\']+)["\']', query_lower)
+            if owner_match:
+                owner_name = owner_match.group(1)
+                filters.append({
+                    "field": "owner_friendlyname",
+                    "operator": "LIKE",
+                    "value": f"%{owner_name}%",
+                    "display_name": f"owner team contains '{owner_name}'"
+                })
+        
+        # Location/Datacenter filters
+        if "location" in query_lower:
+            location_match = re.search(r'location ["\']([^"\']+)["\']', query_lower)
+            if location_match:
+                location_name = location_match.group(1)
+                filters.append({
+                    "field": "location_name",
+                    "operator": "LIKE",
+                    "value": f"%{location_name}%",
+                    "display_name": f"location contains '{location_name}'"
+                })
+        
+        # Rack filters
+        if "rack" in query_lower:
+            rack_match = re.search(r'rack ["\']([^"\']+)["\']', query_lower)
+            if rack_match:
+                rack_name = rack_match.group(1)
+                filters.append({
+                    "field": "rack_name",
+                    "operator": "LIKE",
+                    "value": f"%{rack_name}%",
+                    "display_name": f"rack contains '{rack_name}'"
+                })
+        
+        # OS filters
+        if "windows" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Windows%",
+                "display_name": "Windows servers"
+            })
+        elif "linux" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Linux%",
+                "display_name": "Linux servers"
+            })
+        
+        # Server name filters - extract server names from query (improved for multiple names and misspellings)
+        import re
+        
+        # Look for multiple server name patterns in the query
+        server_names = []
+        
+        # Pattern 1: "server Server2", "on Server2", etc.
+        server_matches = re.findall(r'(?:server\s+|on\s+)?([A-Za-z0-9\-_]+\d+)\b', query_lower)
+        server_names.extend(server_matches)
+        
+        # Pattern 2: Quoted server names "Server2", 'dm-aws-demo-mnet-01'
+        quoted_matches = re.findall(r'["\']([A-Za-z0-9\-_]+)["\']', query_lower)
+        server_names.extend(quoted_matches)
+        
+        # Pattern 3: Hyphenated names like dm-aws-demo-mnet-01
+        hyphen_matches = re.findall(r'\b([a-z]+-[a-z]+-[a-z]+-[a-z]+-\d+)\b', query_lower)
+        server_names.extend(hyphen_matches)
+        
+        # Remove duplicates and common words
+        unique_server_names = []
+        common_words = ["server", "servers", "on", "the", "a", "an", "all", "list", "find", "show", "get", "software", "applications", "installed"]
+        
+        for name in server_names:
+            if name.lower() not in common_words and name not in unique_server_names:
+                unique_server_names.append(name)
+        
+        # Add filters for found server names
+        if unique_server_names:
+            if len(unique_server_names) == 1:
+                # Single server name
+                filters.append({
+                    "field": "name",
+                    "operator": "LIKE",
+                    "value": f"%{unique_server_names[0]}%",
+                    "display_name": f"server name contains '{unique_server_names[0]}'"
+                })
+            else:
+                # Multiple server names - use OR logic
+                filters.append({
+                    "field": "name",
+                    "operator": "IN",
+                    "value": [f"%{name}%" for name in unique_server_names],
+                    "display_name": f"server name contains any of: {', '.join(unique_server_names)}"
+                })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for servers"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for servers"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        
+        # Use *+ to get all fields including relationships - this works better than explicit field lists
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format server results"""
+        if result.get("code") != 0:
+            return f"❌ **Server Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🖥️ Server Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No servers found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Servers**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        elif intent["focus"] == "software":
+            return output + self._format_software_focused_results(objects)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed server results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}**\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("owner_friendlyname"):
+                    output += f"   👥 Owner Team: {fields['owner_friendlyname']}\n"
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("location_name"):
+                    output += f"   📍 Location: {fields['location_name']}\n"
+                if fields.get("rack_name"):
+                    rack_display = fields['rack_name']
+                    if fields.get("nb_u"):
+                        rack_display += f" ({fields['nb_u']}U)"
+                    output += f"   🗄️ Rack: {rack_display}\n"
+                if fields.get("enclosure_name"):
+                    output += f"   📦 Enclosure: {fields['enclosure_name']}\n"
+                if fields.get("managementip"):
+                    output += f"   🌐 Management IP: {fields['managementip']}\n"
+                if fields.get("cpu"):
+                    output += f"   🖥️ CPU: {fields['cpu']}\n"
+                if fields.get("ram"):
+                    output += f"   💾 RAM: {fields['ram']}\n"
+                if fields.get("osfamily_name"):
+                    os_display = fields['osfamily_name']
+                    if fields.get("osversion_name"):
+                        os_display += f" ({fields['osversion_name']})"
+                    output += f"   💿 OS: {os_display}\n"
+                if fields.get("oslicence_name"):
+                    output += f"   📄 OS License: {fields['oslicence_name']}\n"
+                if fields.get("business_criticity"):
+                    crit_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢", "low": "⚪"}.get(fields["business_criticity"], "")
+                    output += f"   📊 Criticality: {crit_emoji} {fields['business_criticity']}\n"
+                if fields.get("serialnumber"):
+                    output += f"   🔢 Serial: {fields['serialnumber']}\n"
+                if fields.get("powerA_name") or fields.get("powerB_name"):
+                    power_info = []
+                    if fields.get("powerA_name"):
+                        power_info.append(f"A: {fields['powerA_name']}")
+                    if fields.get("powerB_name"):
+                        power_info.append(f"B: {fields['powerB_name']}")
+                    output += f"   ⚡ Power: {', '.join(power_info)}\n"
+                
+                # Display software applications when available - Enhanced for complex structure
+                if fields.get("softwares_list"):
+                    softwares = fields["softwares_list"]
+                    if isinstance(softwares, list) and softwares:
+                        output += f"   💾 **Installed Software ({len(softwares)} applications)**:\n"
+                        for j, software in enumerate(softwares[:10], 1):  # Limit to first 10 for readability
+                            if isinstance(software, dict):
+                                # Handle the complex nested structure from your example
+                                software_display_name = (
+                                    software.get("software_id_friendlyname") or  # "MySql 8"
+                                    software.get("software_name") or             # "MySql" 
+                                    software.get("friendlyname") or              # "Oracle Server2"
+                                    software.get("name") or                      # "Oracle"
+                                    "Unknown Software"
+                                )
+                                
+                                # For database servers, show more context
+                                if software.get("finalclass") == "DBServer":
+                                    db_name = software.get("name", "Database")
+                                    software_name = software.get("software_name", "Unknown DB")
+                                    software_version = software.get("software_id_friendlyname", "")
+                                    
+                                    if software_version and software_version != software_name:
+                                        output += f"      {j}. {software_name} ({software_version}) - {db_name}\n"
+                                    else:
+                                        output += f"      {j}. {software_name} - {db_name}\n"
+                                else:
+                                    output += f"      {j}. {software_display_name}\n"
+                            else:
+                                output += f"      {j}. {software}\n"
+                        
+                        if len(softwares) > 10:
+                            output += f"      ... and {len(softwares) - 10} more applications\n"
+                    elif isinstance(softwares, dict):
+                        # Sometimes it might be a dict with object keys
+                        software_count = len(softwares)
+                        if software_count > 0:
+                            output += f"   💾 **Installed Software ({software_count} applications)**:\n"
+                            for j, (soft_key, soft_data) in enumerate(list(softwares.items())[:10], 1):
+                                if isinstance(soft_data, dict) and soft_data.get("fields"):
+                                    soft_fields = soft_data["fields"]
+                                    software_name = (
+                                        soft_fields.get("software_id_friendlyname") or 
+                                        soft_fields.get("software_name") or 
+                                        soft_fields.get("name") or 
+                                        soft_key
+                                    )
+                                    output += f"      {j}. {software_name}\n"
+                                else:
+                                    output += f"      {j}. {soft_key}\n"
+                            
+                            if software_count > 10:
+                                output += f"      ... and {software_count - 10} more applications\n"
+                
+                output += "\n"
+        
+        return output
+    
+    def _format_software_focused_results(self, objects: dict) -> str:
+        """Format results with focus on software applications"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}** ({status})\n"
+                
+                # Show basic server info
+                if fields.get("owner_friendlyname"):
+                    output += f"   👥 Owner: {fields['owner_friendlyname']}\n"
+                if fields.get("osfamily_name"):
+                    os_display = fields['osfamily_name']
+                    if fields.get("osversion_name"):
+                        os_display += f" ({fields['osversion_name']})"
+                    output += f"   💿 OS: {os_display}\n"
+                
+                # Focus on software list - Enhanced to handle complex nested structure
+                if fields.get("softwares_list"):
+                    softwares = fields["softwares_list"]
+                    
+                    if isinstance(softwares, list) and softwares:
+                        output += f"\n   💾 **Installed Software ({len(softwares)} applications)**:\n"
+                        
+                        for j, software in enumerate(softwares, 1):
+                            if isinstance(software, dict):
+                                # Handle complex nested structure - the software data structure you showed
+                                software_display_name = (
+                                    software.get("software_id_friendlyname") or  # "MySql 8"
+                                    software.get("software_name") or             # "MySql" 
+                                    software.get("friendlyname") or              # "Oracle Server2"
+                                    software.get("name") or                      # "Oracle"
+                                    "Unknown Software"
+                                )
+                                
+                                # Some software items are actually software instances with detailed info
+                                if software.get("finalclass") == "DBServer":
+                                    # This is a database server software instance
+                                    db_name = software.get("name", "Database")
+                                    software_name = software.get("software_name", "Unknown DB")
+                                    software_version = software.get("software_id_friendlyname", "")
+                                    
+                                    if software_version and software_version != software_name:
+                                        output += f"      {j}. {software_name} ({software_version}) - {db_name}\n"
+                                    else:
+                                        output += f"      {j}. {software_name} - {db_name}\n"
+                                else:
+                                    # Standard software entry
+                                    output += f"      {j}. {software_display_name}\n"
+                                
+                                # Show database schemas if available
+                                if software.get("dbschema_list"):
+                                    schemas = software["dbschema_list"]
+                                    if isinstance(schemas, list) and schemas:
+                                        schema_names = [schema.get("name", "Unknown") for schema in schemas[:3]]
+                                        if len(schemas) > 3:
+                                            schema_display = f"{', '.join(schema_names)} (+{len(schemas)-3} more)"
+                                        else:
+                                            schema_display = ', '.join(schema_names)
+                                        output += f"        └─ Schemas: {schema_display}\n"
+                            else:
+                                # Simple string entry
+                                output += f"      {j}. {software}\n"
+                        
+                    elif isinstance(softwares, dict):
+                        # Handle dict structure (object keys)
+                        software_count = len(softwares)
+                        if software_count > 0:
+                            output += f"\n   💾 **Installed Software ({software_count} applications)**:\n"
+                            for j, (soft_key, soft_data) in enumerate(softwares.items(), 1):
+                                if isinstance(soft_data, dict) and soft_data.get("fields"):
+                                    soft_fields = soft_data["fields"]
+                                    software_name = (
+                                        soft_fields.get("software_id_friendlyname") or 
+                                        soft_fields.get("software_name") or 
+                                        soft_fields.get("name") or 
+                                        soft_key
+                                    )
+                                    output += f"      {j}. {software_name}\n"
+                                else:
+                                    output += f"      {j}. {soft_key}\n"
+                    else:
+                        output += f"\n   ⚠️  **No software applications found or data not available**\n"
+                else:
+                    output += f"\n   ⚠️  **No software list available for this server**\n"
+                
+                output += "\n"
+        
+        return output
+
+
+class VirtualMachineHandler(SmartHandlerBase):
+    """Handler for Virtual Machine queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "VirtualMachine")
+        
+        self.field_mappings = {
+            "name": "name",
+            "description": "description", 
+            "organization": "org_name",
+            "status": "status",
+            "business_criticality": "business_criticity",
+            
+            # Virtual infrastructure
+            "virtual_host": "virtualhost_name",
+            
+            # OS information
+            "os_family": "osfamily_name",
+            "os_version": "osversion_name",
+            "os_license": "oslicence_name",
+            
+            # Resources
+            "cpu": "cpu",
+            "ram": "ram",
+            "management_ip": "managementip",
+            
+            # Ownership and management
+            "owner": "owner_friendlyname",  # Team that owns the VM
+            "custodian": "custodian_friendlyname",  # Person responsible for the VM
+            
+            # Security
+            "confidentiality": "confidentiality",
+            "integrity": "integrity", 
+            "availability": "availability",
+            "cvss": "cvss",
+            
+            # Related objects
+            "contacts": "contacts_list",
+            "softwares": "softwares_list", 
+            "tickets": "tickets_list",
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process virtual machine query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse VM query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for VMs"""
+        if "by status" in query_lower:
+            return "status"
+        elif "by host" in query_lower or "by virtual host" in query_lower:
+            return "virtualhost_name"
+        elif "by organization" in query_lower:
+            return "org_name"
+        elif "by os" in query_lower:
+            return "osfamily_name"
+        elif "by owner" in query_lower or "by team" in query_lower:
+            return "owner_friendlyname"
+        elif "by custodian" in query_lower:
+            return "custodian_friendlyname"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract VM-specific filters"""
+        filters = []
+        
+        if "production" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "production",
+                "display_name": "production VMs"
+            })
+        
+        if "critical" in query_lower:
+            filters.append({
+                "field": "business_criticity",
+                "operator": "=", 
+                "value": "critical",
+                "display_name": "critical VMs"
+            })
+        
+        # Owner/Team filters
+        if "owner" in query_lower or "team" in query_lower:
+            owner_match = re.search(r'(?:owner|team) ["\']([^"\']+)["\']', query_lower)
+            if owner_match:
+                owner_name = owner_match.group(1)
+                filters.append({
+                    "field": "owner_friendlyname",
+                    "operator": "LIKE",
+                    "value": f"%{owner_name}%",
+                    "display_name": f"owner team contains '{owner_name}'"
+                })
+        
+        # Virtual host filters
+        if "host" in query_lower:
+            host_match = re.search(r'host ["\']([^"\']+)["\']', query_lower)
+            if host_match:
+                host_name = host_match.group(1)
+                filters.append({
+                    "field": "virtualhost_name",
+                    "operator": "LIKE",
+                    "value": f"%{host_name}%",
+                    "display_name": f"virtual host contains '{host_name}'"
+                })
+        
+        # OS filters
+        if "windows" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Windows%",
+                "display_name": "Windows VMs"
+            })
+        elif "linux" in query_lower:
+            filters.append({
+                "field": "osfamily_name",
+                "operator": "LIKE",
+                "value": "%Linux%",
+                "display_name": "Linux VMs"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for VMs"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for VMs"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format VM results"""
+        if result.get("code") != 0:
+            return f"❌ **Virtual Machine Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**💻 Virtual Machine Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No virtual machines found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total VMs**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed VM results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}**\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("virtualhost_name"):
+                    output += f"   🖥️ Virtual Host: {fields['virtualhost_name']}\n"
+                if fields.get("owner_friendlyname"):
+                    output += f"   👥 Owner Team: {fields['owner_friendlyname']}\n"
+                if fields.get("custodian_friendlyname"):
+                    output += f"   👤 Custodian: {fields['custodian_friendlyname']}\n"
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("managementip"):
+                    output += f"   🌐 IP: {fields['managementip']}\n"
+                if fields.get("cpu"):
+                    output += f"   🖥️ CPU: {fields['cpu']}\n"
+                if fields.get("ram"):
+                    output += f"   💾 RAM: {fields['ram']}\n"
+                if fields.get("osfamily_name"):
+                    os_display = fields['osfamily_name']
+                    if fields.get("osversion_name"):
+                        os_display += f" ({fields['osversion_name']})"
+                    output += f"   💿 OS: {os_display}\n"
+                if fields.get("oslicence_name"):
+                    output += f"   📄 OS License: {fields['oslicence_name']}\n"
+                if fields.get("business_criticity"):
+                    crit_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢", "low": "⚪"}.get(fields["business_criticity"], "")
+                    output += f"   � Criticality: {crit_emoji} {fields['business_criticity']}\n"
+                
+                output += "\n"
+        
+        return output
+
+
+class NetworkDeviceHandler(SmartHandlerBase):
+    """Handler for Network Device queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "NetworkDevice")
+        
+        self.field_mappings = {
+            "name": "name",
+            "description": "description",
+            "organization": "org_name", 
+            "status": "status",
+            "business_criticality": "business_criticity",
+            
+            # Location and infrastructure
+            "location": "location_name",
+            "brand": "brand_name",
+            "model": "model_name",
+            "asset_number": "asset_number",
+            "serial_number": "serialnumber",
+            
+            # Network specific
+            "network_type": "networkdevicetype_name",
+            "ios_version": "iosversion_name",
+            "management_ip": "managementip",
+            "ram": "ram",
+            
+            # Datacenter placement
+            "rack": "rack_name",
+            "enclosure": "enclosure_name",
+            "rack_units": "nb_u",
+            
+            # Power connections
+            "power_a": "powerA_name",
+            "power_b": "powerB_name",
+            
+            # Security ratings (missing from original)
+            "confidentiality": "confidentiality",
+            "integrity": "integrity",
+            "availability": "availability",
+            "score": "score",
+            "cvss": "cvss",
+            
+            # Ownership and relationships (corrected field names)
+            "owner": "owner_friendlyname",  # Team that owns the device
+            "custodians": "custodian_list",  # People responsible for the device
+            "contingency": "contingency_friendlyname",  # Backup device
+            
+            # Related objects
+            "contacts": "contacts_list",
+            "connected_devices": "connectablecis_list",
+            "softwares": "softwares_list",
+            "tickets": "tickets_list",
+            "documents": "documents_list",
+            "services": "services_list",
+            "fiber_interfaces": "fiberinterfacelist_list",
+            "sans": "san_list",
+            "physical_interfaces": "physicalinterface_list",
+            
+            # Dates
+            "purchase_date": "purchase_date",
+            "warranty_end": "end_of_warranty",
+            "move_to_production": "move2production",
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process network device query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse network device query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for network devices"""
+        if "by type" in query_lower:
+            return "networkdevicetype_name"
+        elif "by status" in query_lower:
+            return "status"
+        elif "by location" in query_lower:
+            return "location_name"
+        elif "by organization" in query_lower:
+            return "org_name"
+        elif "by brand" in query_lower:
+            return "brand_name"
+        elif "by owner" in query_lower or "by team" in query_lower:
+            return "owner_friendlyname"
+        elif "by rack" in query_lower:
+            return "rack_name"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract network device specific filters"""
+        filters = []
+        
+        # Device type filters
+        if "switch" in query_lower:
+            filters.append({
+                "field": "networkdevicetype_name",
+                "operator": "LIKE",
+                "value": "%switch%",
+                "display_name": "switch devices"
+            })
+        elif "router" in query_lower:
+            filters.append({
+                "field": "networkdevicetype_name", 
+                "operator": "LIKE",
+                "value": "%router%",
+                "display_name": "router devices"
+            })
+        elif "firewall" in query_lower:
+            filters.append({
+                "field": "networkdevicetype_name",
+                "operator": "LIKE", 
+                "value": "%firewall%",
+                "display_name": "firewall devices"
+            })
+        
+        # Status filters
+        if "production" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "production",
+                "display_name": "production devices"
+            })
+        
+        # Owner/Team filters  
+        if "owner" in query_lower or "team" in query_lower:
+            owner_match = re.search(r'(?:owner|team) ["\']([^"\']+)["\']', query_lower)
+            if owner_match:
+                owner_name = owner_match.group(1)
+                filters.append({
+                    "field": "owner_friendlyname",
+                    "operator": "LIKE",
+                    "value": f"%{owner_name}%",
+                    "display_name": f"owner team contains '{owner_name}'"
+                })
+        
+        # Location filters
+        if "location" in query_lower:
+            location_match = re.search(r'location ["\']([^"\']+)["\']', query_lower)
+            if location_match:
+                location_name = location_match.group(1)
+                filters.append({
+                    "field": "location_name",
+                    "operator": "LIKE",
+                    "value": f"%{location_name}%",
+                    "display_name": f"location contains '{location_name}'"
+                })
+        
+        # Rack filters
+        if "rack" in query_lower:
+            rack_match = re.search(r'rack ["\']([^"\']+)["\']', query_lower)
+            if rack_match:
+                rack_name = rack_match.group(1)
+                filters.append({
+                    "field": "rack_name",
+                    "operator": "LIKE",
+                    "value": f"%{rack_name}%",
+                    "display_name": f"rack contains '{rack_name}'"
+                })
+        
+        # Security filters
+        if "critical" in query_lower and "security" in query_lower:
+            filters.append({
+                "field": "business_criticity",
+                "operator": "=",
+                "value": "critical",
+                "display_name": "critical network devices"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for network devices"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for network devices"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format network device results"""
+        if result.get("code") != 0:
+            return f"❌ **Network Device Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🌐 Network Device Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No network devices found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Network Devices**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed network device results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                device_type = fields.get("networkdevicetype_name", "Unknown")
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}** ({device_type})\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("owner_friendlyname"):
+                    output += f"   👥 Owner Team: {fields['owner_friendlyname']}\n"
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("location_name"):
+                    output += f"   📍 Location: {fields['location_name']}\n"
+                if fields.get("managementip"):
+                    output += f"   🌐 Management IP: {fields['managementip']}\n"
+                if fields.get("brand_name"):
+                    output += f"   🏭 Brand: {fields['brand_name']}\n"
+                if fields.get("model_name"):
+                    output += f"   📱 Model: {fields['model_name']}\n"
+                if fields.get("iosversion_name"):
+                    output += f"   💿 IOS Version: {fields['iosversion_name']}\n"
+                if fields.get("rack_name"):
+                    rack_display = fields['rack_name']
+                    if fields.get("nb_u"):
+                        rack_display += f" ({fields['nb_u']}U)"
+                    output += f"   🗄️ Rack: {rack_display}\n"
+                if fields.get("enclosure_name"):
+                    output += f"   📦 Enclosure: {fields['enclosure_name']}\n"
+                if fields.get("ram"):
+                    output += f"   💾 RAM: {fields['ram']}\n"
+                if fields.get("business_criticity"):
+                    crit_emoji = {"critical": "🔴", "high": "🟡", "medium": "🟢", "low": "⚪"}.get(fields["business_criticity"], "")
+                    output += f"   📊 Criticality: {crit_emoji} {fields['business_criticity']}\n"
+                if fields.get("serialnumber"):
+                    output += f"   🔢 Serial: {fields['serialnumber']}\n"
+                if fields.get("asset_number"):
+                    output += f"   🏷️ Asset #: {fields['asset_number']}\n"
+                if fields.get("powerA_name") or fields.get("powerB_name"):
+                    power_info = []
+                    if fields.get("powerA_name"):
+                        power_info.append(f"A: {fields['powerA_name']}")
+                    if fields.get("powerB_name"):
+                        power_info.append(f"B: {fields['powerB_name']}")
+                    output += f"   ⚡ Power: {', '.join(power_info)}\n"
+                
+                output += "\n"
+        
+        return output
+
+
+# =============================================================================
+# People and Organization Handlers
+# =============================================================================
+
+class PersonHandler(SmartHandlerBase):
+    """Handler for Person queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Person")
+        
+        self.field_mappings = {
+            "name": "name",  # Last name
+            "first_name": "first_name",
+            "full_name": "friendlyname",
+            "email": "email",
+            "phone": "phone",
+            "mobile": "mobile_phone",
+            "status": "status",  # active/inactive
+            "organization": "org_name",
+            "function": "function",
+            "employee_number": "employee_number",
+            "location": "location_name",
+            "manager": "manager_name",
+            "business_criticality": "business_criticity",
+            
+            # Security ratings (from docs)
+            "confidentiality": "confidentiality",
+            "integrity": "integrity", 
+            "availability": "availability",
+            "score": "score",
+            
+            # Relationships
+            "contingency": "contingency_friendlyname",  # Backup person
+            "teams": "team_list",  # Teams this person belongs to
+            "users": "user_list",  # User accounts for this person
+            "tickets": "tickets_list",  # Tickets assigned to this person
+            "cis": "cis_list",  # CIs this person is contact for
+            
+            # Additional fields
+            "notify": "notify",  # Notification setting
+            "picture": "picture",  # Profile picture
+        }
+        
+        self.status_values = {
+            "active": "active",
+            "inactive": "inactive"
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process person query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse person query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for people"""
+        if "by organization" in query_lower:
+            return "org_name"
+        elif "by location" in query_lower:
+            return "location_name"
+        elif "by function" in query_lower:
+            return "function"
+        elif "by status" in query_lower:
+            return "status"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract person-specific filters"""
+        filters = []
+        
+        # Status filters
+        if "active" in query_lower and "people" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "active",
+                "display_name": "active people"
+            })
+        elif "inactive" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "inactive", 
+                "display_name": "inactive people"
+            })
+        
+        # Organization filters
+        org_match = re.search(r'organization ["\']([^"\']+)["\']', query_lower)
+        if org_match:
+            org_name = org_match.group(1)
+            filters.append({
+                "field": "org_name",
+                "operator": "LIKE",
+                "value": f"%{org_name}%",
+                "display_name": f"organization contains '{org_name}'"
+            })
+        
+        # Function/role filters
+        if "manager" in query_lower and "function" in query_lower:
+            filters.append({
+                "field": "function",
+                "operator": "LIKE",
+                "value": "%manager%",
+                "display_name": "managers"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for people"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for people"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format person results"""
+        if result.get("code") != 0:
+            return f"❌ **Person Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**👤 Person Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No people found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total People**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed person results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                first_name = fields.get("first_name", "")
+                last_name = fields.get("name", obj_key)
+                full_name = f"{first_name} {last_name}" if first_name else last_name
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{full_name}**\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("function"):
+                    output += f"   💼 Function: {fields['function']}\n"
+                if fields.get("email"):
+                    output += f"   📧 Email: {fields['email']}\n"
+                if fields.get("phone"):
+                    output += f"   📞 Phone: {fields['phone']}\n"
+                if fields.get("mobile_phone"):
+                    output += f"   📱 Mobile: {fields['mobile_phone']}\n"
+                if fields.get("location_name"):
+                    output += f"   📍 Location: {fields['location_name']}\n"
+                if fields.get("manager_name"):
+                    output += f"   👨‍💼 Manager: {fields['manager_name']}\n"
+                if fields.get("employee_number"):
+                    output += f"   🆔 Employee #: {fields['employee_number']}\n"
+                
+                output += "\n"
+        
+        return output
+
+
+class TeamHandler(SmartHandlerBase):
+    """Handler for Team queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Team")
+        
+        self.field_mappings = {
+            "name": "name",
+            "status": "status",  # active/inactive
+            "organization": "org_name",
+            "email": "email",
+            "phone": "phone",
+            "function": "function",
+            
+            # Team specific fields
+            "members": "persons_list",  # Team members
+            "tickets": "tickets_list",  # Tickets assigned to team
+            "cis": "cis_list",  # CIs this team is contact for
+            "notify": "notify",  # Notification setting
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process team query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse team query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for teams"""
+        if "by organization" in query_lower:
+            return "org_name"
+        elif "by function" in query_lower:
+            return "function"
+        elif "by status" in query_lower:
+            return "status"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract team-specific filters"""
+        filters = []
+        
+        if "active" in query_lower and "team" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "active",
+                "display_name": "active teams"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for teams"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for teams"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format team results"""
+        if result.get("code") != 0:
+            return f"❌ **Team Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**👥 Team Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No teams found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Teams**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed team results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}**\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("org_name"):
+                    output += f"   🏢 Organization: {fields['org_name']}\n"
+                if fields.get("function"):
+                    output += f"   💼 Function: {fields['function']}\n"
+                if fields.get("email"):
+                    output += f"   📧 Email: {fields['email']}\n"
+                if fields.get("phone"):
+                    output += f"   📞 Phone: {fields['phone']}\n"
+                
+                output += "\n"
+        
+        return output
+
+
+class OrganizationHandler(SmartHandlerBase):
+    """Handler for Organization queries"""
+    
+    def __init__(self, client: ITopClient):
+        super().__init__(client, "Organization")
+        
+        self.field_mappings = {
+            "name": "name",
+            "code": "code", 
+            "status": "status",  # active/inactive
+            "parent": "parent_name",
+            "delivery_model": "deliverymodel_name",
+        }
+    
+    async def process_query(self, query: str, limit: int = 100) -> str:
+        """Process organization query"""
+        intent = self._parse_query_intent(query)
+        
+        oql_query = self.build_oql_query(intent)
+        output_fields = self.determine_output_fields(intent)
+        
+        operation = {
+            "operation": "core/get",
+            "class": self.class_name,
+            "key": oql_query,
+            "output_fields": output_fields,
+            "limit": limit
+        }
+        
+        result = await self.client.make_request(operation)
+        return self._format_results(result, intent, query, oql_query)
+    
+    def _parse_query_intent(self, query: str) -> Dict[str, Any]:
+        """Parse organization query intent"""
+        query_lower = query.lower()
+        
+        intent = {
+            "action": "list",
+            "filters": [],
+            "grouping": None,
+            "fields": []
+        }
+        
+        if any(word in query_lower for word in ["count", "how many", "total"]):
+            intent["action"] = "count"
+        elif any(word in query_lower for word in ["group by", "breakdown", "summary"]):
+            intent["action"] = "group"
+            intent["grouping"] = self._detect_grouping(query_lower)
+        
+        intent["filters"] = self._extract_filters(query_lower)
+        return intent
+    
+    def _detect_grouping(self, query_lower: str) -> Optional[str]:
+        """Detect grouping for organizations"""
+        if "by status" in query_lower:
+            return "status"
+        elif "by parent" in query_lower:
+            return "parent_name"
+        elif "by delivery model" in query_lower:
+            return "deliverymodel_name"
+        return None
+    
+    def _extract_filters(self, query_lower: str) -> List[Dict[str, Any]]:
+        """Extract organization-specific filters"""
+        filters = []
+        
+        if "active" in query_lower and "organization" in query_lower:
+            filters.append({
+                "field": "status",
+                "operator": "=",
+                "value": "active",
+                "display_name": "active organizations"
+            })
+        
+        return filters
+    
+    def build_oql_query(self, intent: Dict[str, Any]) -> str:
+        """Build OQL query for organizations"""
+        return SmartQueryBuilder.build_oql_query(self.class_name, intent["filters"])
+    
+    def determine_output_fields(self, intent: Dict[str, Any]) -> str:
+        """Determine output fields for organizations"""
+        if intent["action"] == "count":
+            return f"id,{intent['grouping']}" if intent["grouping"] else "id"
+        return "*+"
+    
+    def _format_results(self, result: dict, intent: Dict[str, Any], query: str, oql_query: str) -> str:
+        """Format organization results"""
+        if result.get("code") != 0:
+            return f"❌ **Organization Query Error**: {result.get('message', 'Unknown error')}"
+        
+        objects = result.get("objects", {})
+        message = result.get("message", "")
+        total_count = _extract_count_from_message(message)
+        
+        output = f"**🏢 Organization Query Results**\n\n"
+        output += f"**Query**: \"{query}\"\n"
+        output += f"**OQL Used**: `{oql_query}`\n"
+        
+        if intent["filters"]:
+            filter_descriptions = [f.get("display_name", "unknown filter") for f in intent["filters"]]
+            output += f"**Filters Applied**: {', '.join(filter_descriptions)}\n"
+        
+        if total_count is not None:
+            output += f"**Total Found**: {total_count}\n"
+        output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+        
+        if not objects:
+            return output + "No organizations found matching your criteria."
+        
+        if intent["action"] == "count":
+            return output + f"**Total Organizations**: {total_count or len(objects)}"
+        elif intent["action"] == "group":
+            return output + SmartGroupingEngine.format_grouped_results(objects, intent["grouping"], self.class_name)
+        else:
+            return output + self._format_detailed_results(objects)
+    
+    def _format_detailed_results(self, objects: dict) -> str:
+        """Format detailed organization results"""
+        output = ""
+        
+        for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+            if obj_data.get("code") == 0:
+                fields = obj_data.get("fields", {})
+                
+                name = fields.get("name", obj_key)
+                status = fields.get("status", "Unknown")
+                
+                output += f"{i}. **{name}**\n"
+                output += f"   Status: {status}\n"
+                
+                if fields.get("code"):
+                    output += f"   📋 Code: {fields['code']}\n"
+                if fields.get("parent_name"):
+                    output += f"   🏢 Parent: {fields['parent_name']}\n"
+                if fields.get("deliverymodel_name"):
+                    output += f"   📊 Delivery Model: {fields['deliverymodel_name']}\n"
+                
+                output += "\n"
+        
+        return output
+# =============================================================================
+# Main Smart Query Processor V2
+# =============================================================================
+
+# Conditionally register the tool if mcp is available
+if mcp:
+    @mcp.tool()
+    async def smart_query_v2(
+        query: str,
+        force_class: Optional[str] = None,
+        limit: int = 100
+    ) -> str:
+        """
+        Smart iTop Query Processor V2 - Class-Specific Query Engine
+        Features:
+        - Automatically detects the iTop class from a natural language query
+        - Uses specialized handlers for common classes (UserRequest, Ticket, Server, etc.)
+        - Supports real-time schema discovery using *+ output fields
+        - Maps user-friendly field names to iTop schema fields
+        - Handles vague queries, SLA analysis, deadlines, grouping, and counts
+        - Falls back to a generic handler for unsupported classes
+
+        Args:
+            query (str): The natural language query to process
+            force_class (Optional[str]): Force a specific iTop class (overrides auto-detection)
+            limit (int): Maximum number of results to return (default: 100)
+        """
+        return await smart_query_v2_impl(query, force_class, limit)
+
+async def smart_query_v2_impl(
+    query: str,
+    force_class: Optional[str] = None,
+    limit: int = 100
+) -> str:
+    """
+    Smart iTop Query Processor V2 - Implementation
+    """
+    try:
+        if limit < 1:
+            limit = 1
+        
+        if force_class:
+            class_name = force_class
+            confidence = 1.0
+        else:
+            class_name, confidence, _ = smart_class_detection(query)
+
+        client = get_itop_client()
+        handler_map = {
+            "UserRequest": UserRequestHandler,
+            "Ticket": TicketHandler,
+            "Change": ChangeHandler,
+            "Incident": IncidentHandler,
+            "Problem": ProblemHandler,
+            "PC": PCHandler,
+            "Server": ServerHandler,
+            "VirtualMachine": VirtualMachineHandler,
+            "NetworkDevice": NetworkDeviceHandler,
+            "Person": PersonHandler,
+            "Team": TeamHandler,
+            "Organization": OrganizationHandler,
+        }
+        handler_cls = handler_map.get(class_name)
+        if handler_cls is not None:
+            handler = handler_cls(client)
+            return await handler.process_query(query, limit)
+        else:
+            return await _generic_handler(query, class_name, client, limit)
+            
+    except Exception as e:
+        return f"❌ **Smart Query V2 Error**: {str(e)}"
+async def _generic_handler(query: str, class_name: str, client: ITopClient, limit: int) -> str:
+    """Enhanced generic handler for classes not yet implemented"""
+    query_lower = query.lower()
+    
+    # Handle comparison queries (vs, compared to, etc.)
+    if any(comp_word in query_lower for comp_word in ["vs", "versus", "compared to", "comparison"]):
+        return await _handle_generic_comparison(query, class_name, client, limit)
+    
+    # Handle grouping/breakdown queries
+    if any(group_word in query_lower for group_word in ["organization wise", "organisation wise", "by organization", "by organisation", "breakdown", "group by"]):
+        return await _handle_generic_grouping(query, class_name, client, limit)
+    
+    # Simple count or list query
+    if any(word in query_lower for word in ["count", "how many"]):
+        operation = {
+            "operation": "core/get",
+            "class": class_name,
+            "key": f"SELECT {class_name}",
+            "output_fields": "id",
+            "limit": limit
+        }
+    else:
+        operation = {
+            "operation": "core/get",
+            "class": class_name,
+            "key": f"SELECT {class_name}",
+            "output_fields": "*+",
+            "limit": min(limit, 10)  # Limit for detailed view
+        }
+    
+    result = await client.make_request(operation)
+    
+    if result.get("code") != 0:
+        return f"❌ **{class_name} Query Error**: {result.get('message', 'Unknown error')}"
+    
+    objects = result.get("objects", {})
+    message = result.get("message", "")
+    total_count = _extract_count_from_message(message)
+    
+    output = f"**📋 {class_name} Query Results**\n\n"
+    output += f"**Query**: \"{query}\"\n"
+    oql_query = operation["key"]
+    output += f"**OQL Used**: `{oql_query}`\n"
+    output += f"**Note**: Using generic handler (specific handler not yet implemented)\n"
+    
+    if total_count is not None:
+        output += f"**Total Found**: {total_count}\n"
+    output += f"**Returned**: {len(objects) if objects else 0}\n\n"
+    
+    if not objects:
+        return output + f"No {class_name} records found."
+    
+    # Enhanced listing with better field detection
+    for i, (obj_key, obj_data) in enumerate(objects.items(), 1):
+        if obj_data.get("code") == 0:
+            fields = obj_data.get("fields", {})
+            
+            # Try to show useful fields with priority order
+            name_fields = ["name", "friendlyname", "title", "ref", "id"]
+            name_value = None
+            for field in name_fields:
+                if field in fields and fields[field]:
+                    name_value = fields[field]
+                    break
+            
+            if not name_value:
+                name_value = "Unknown"
+            
+            output += f"{i}. **{name_value}**\n"
+            
+            # Show most relevant fields based on class type
+            interesting_fields = _get_interesting_fields_for_class(class_name)
+            for field in interesting_fields:
+                if field in fields and fields[field] and field not in name_fields:
+                    display_name = field.replace("_", " ").title()
+                    output += f"   {display_name}: {fields[field]}\n"
+            output += "\n"
+    
+    return output
+
+async def _handle_generic_comparison(query: str, class_name: str, client: ITopClient, limit: int) -> str:
+    """Handle comparison queries for generic classes"""
+    return f"**⚠️ Enhanced Comparison Handler Needed**\n\n" \
+           f"The query \"{query}\" appears to be a comparison query for {class_name} class.\n" \
+           f"This requires a specialized handler that can:\n" \
+           f"- Parse comparison criteria\n" \
+           f"- Execute multiple queries\n" \
+           f"- Present side-by-side results\n\n" \
+           f"Please implement a specific handler for {class_name} class to support this functionality."
+
+async def _handle_generic_grouping(query: str, class_name: str, client: ITopClient, limit: int) -> str:
+    """Handle grouping queries for generic classes"""
+    
+    # Try to detect grouping field
+    grouping_field = None
+    if "organization" in query.lower() or "organisation" in query.lower():
+        grouping_field = "org_name"
+    elif "status" in query.lower():
+        grouping_field = "status"
+    elif "location" in query.lower():
+        grouping_field = "location_name"
+    
+    if not grouping_field:
+        return f"**⚠️ Grouping Field Detection Failed**\n\n" \
+               f"Could not determine the grouping field for query: \"{query}\"\n" \
+               f"Please implement a specific handler for {class_name} class."
+    
+    # Execute grouped query
+    operation = {
+        "operation": "core/get",
+        "class": class_name,
+        "key": f"SELECT {class_name}",
+        "output_fields": f"id,{grouping_field}",
+        "limit": limit
+    }
+    
+    result = await client.make_request(operation)
+    
+    if result.get("code") != 0:
+        return f"❌ **{class_name} Grouping Error**: {result.get('message', 'Unknown error')}"
+    
+    objects = result.get("objects", {})
+    total_count = _extract_count_from_message(result.get("message", ""))
+    
+    # Group results
+    groups = {}
+    for obj_key, obj_data in objects.items():
+        if obj_data.get("code") == 0:
+            fields = obj_data.get("fields", {})
+            group_value = fields.get(grouping_field, "Unknown")
+            if group_value not in groups:
+                groups[group_value] = 0
+            groups[group_value] += 1
+    
+    output = f"**📊 {class_name} Grouped by {grouping_field.replace('_', ' ').title()}**\n\n"
+    output += f"**Query**: \"{query}\"\n"
+    output += f"**Total Found**: {total_count or len(objects)}\n\n"
+    
+    for group_name, count in sorted(groups.items()):
+        output += f"**{group_name}**: {count} items\n"
+    
+    return output
+
+def _get_interesting_fields_for_class(class_name: str) -> List[str]:
+    """Return interesting fields to display for each class type"""
+    common_fields = ["status", "org_name", "organization", "description"]
+    
+    class_specific = {
+        "Organization": ["status", "code", "parent_name", "deliverymodel_name"],
+        "Location": ["status", "org_name", "country", "city", "address"],
+        "Person": ["status", "org_name", "email", "phone", "function"],
+        "Team": ["status", "org_name", "email", "function"],
+        "Contact": ["status", "org_name", "email", "phone"],
+        "Application": ["status", "org_name", "business_criticity", "move2production"],
+        "Service": ["status", "org_name", "business_criticity", "description"],
+    }
+    
+    return class_specific.get(class_name, common_fields)
+@mcp.tool()
+async def list_operations() -> str:
+    """List all available operations in the iTop REST API."""
+    try:
+        client = get_itop_client()
+        operation_data = {"operation": "list_operations"}
+        result = await client.make_request(operation_data)
+        
+        if result.get("code") != 0:
+            return f"Error: {result.get('message', 'Unknown error')}"
+        
+        operations = result.get("operations", [])
+        output = "Available iTop REST API operations:\n\n"
+        
+        for op in operations:
+            output += f"• {op.get('verb', 'Unknown')}: {op.get('description', 'No description')}\n"
+        
+        return output
+    except Exception as e:
+        return f"Error listing operations: {str(e)}"
+    
 def main():
     """Main entry point for the MCP server"""
-    # Check environment variables
     if not all([ITOP_BASE_URL, ITOP_USER, ITOP_PASSWORD]):
         print("Error: Missing required environment variables:")
         print("  - ITOP_BASE_URL: URL to your iTop instance")
@@ -2511,10 +4763,8 @@ def main():
         print("  - ITOP_PASSWORD: iTop password")
         print("  - ITOP_VERSION: API version (optional, default: 1.4)")
         exit(1)
-    
-    # Run the server
-    mcp.run(transport="stdio")
+        
+    mcp.run()
 
 if __name__ == "__main__":
     main()
-

@@ -6,31 +6,22 @@ A Model Context Protocol (MCP) server for integrating with iTop ITSM (IT Service
 
 The iTop MCP server provides the following tools:
 
-**Enhanced Support Ticket Management:**
-- **get_support_tickets**: Get support tickets with SLA tracking and optimized field selection
-- **get_ticket_details**: Get comprehensive details for a specific ticket
-- **create_user_request**: Streamlined user request creation with smart field resolution
-- **search_tickets_by_caller**: Find tickets by caller name
-- **get_my_assigned_tickets**: Get tickets assigned to a specific agent with status grouping
+**🧠 Smart Query Processor V2 (New Enhanced Version):**
+- **smart_query_v2**: Revolutionary natural language query processor with class-specific intelligence
+  - **Automatic Class Detection**: Intelligently detects target iTop class from natural language
+  - **12+ Specialized Handlers**: Dedicated processors for UserRequest, Ticket, Change, Incident, Problem, Server, PC, VirtualMachine, NetworkDevice, Person, Team, Organization
+  - **Advanced Query Features**: Grouping, filtering, SLA analysis, deadline tracking, and statistical breakdowns
+  - **Smart Field Mapping**: User-friendly field aliases automatically mapped to iTop schema
+  - **Fuzzy Matching**: Intelligent name matching for servers, people, and other entities
+  - **Real-time Schema Discovery**: Uses `*+` fields for automatic field detection
+  - **Enhanced Formatting**: Class-specific output with icons, detailed/summary modes, and grouped results
 
 **Core iTop Operations:**
 - **list_operations**: List all available iTop REST API operations
-- **get_objects**: Search and retrieve iTop objects (tickets, users, CIs, etc.)
-- **create_object**: Create new objects in iTop
-- **update_object**: Update existing objects
-- **delete_object**: Delete objects (with simulation mode for safety)
-- **apply_stimulus**: Apply state transitions to objects (e.g., resolve tickets)
-- **get_related_objects**: Find related objects through impact/dependency relationships
-- **check_credentials**: Verify iTop API credentials
+- **smart_query_v2**: Process natural language queries with intelligent class detection and specialized handlers
 
-**Organization Management:**
-- **get_organizations**: List and search organizations with filtering
-
-**AI & Smart Query Features:**
-- **smart_query_processor**: Use natural language to query iTop data, including advanced stats, grouping, SLA/time analysis, and multi-query comparison.
-- **Dynamic Schema Discovery**: Automatically detects available iTop classes and fields, so you don't need to hardcode field names.
-- **Flexible Output**: Results can be formatted as tables, summaries, JSON, or detailed views.
-- **Extensible Tools**: Add new tools by decorating async functions with `@mcp.tool()`.
+**Legacy Support (Deprecated):**
+- Note: Previous versions included additional tools (get_objects, create_object, update_object, delete_object, apply_stimulus, get_related_objects, check_credentials) which have been streamlined in favor of the more powerful smart_query_v2 approach
 
 ## Installation
 
@@ -137,29 +128,113 @@ Add to your Claude Desktop configuration file:
 
 For other MCP clients, use similar configuration with the appropriate command and environment variables.
 
-## 🎯 Support Ticket Management
+## 🧠 Smart Query Processor V2
 
-The enhanced support ticket functionality provides optimized field selection for common ITSM operations:
+The Smart Query Processor V2 represents a major advancement in natural language query processing for iTop. It features class-specific handlers that understand the unique characteristics and relationships of different iTop object types.
 
-### Default Fields for UserRequest:
-- `ref`: Ticket reference number
-- `title`: Ticket title/summary
-- `status`: Current status
-- `start_date`: Ticket start date
-- `close_date`: Ticket close date  
-- `sla_tto_passed`: SLA Time to Own compliance (✓/✗)
-- `sla_ttr_passed`: SLA Time to Resolve compliance (✓/✗)
+### Supported Classes & Handlers
 
-### SLA Tracking
-The server automatically tracks SLA compliance and provides visual indicators:
-- ✅ **On Time**: SLA target met
-- ❌ **Breached**: SLA target exceeded  
-- ➖ **N/A**: SLA not applicable
+#### 🎫 Ticket Management
+- **UserRequest**: User service requests with SLA tracking
+- **Ticket**: Generic ticket operations
+- **Change**: Change management tickets
+- **Incident**: Incident management
+- **Problem**: Problem management
 
-### Output Formats
-1. **detailed**: Full ticket information with SLA status
-2. **summary**: Condensed view with status breakdown and SLA breach count
-3. **table**: Tabular format for easy scanning
+#### 🖥️ Infrastructure
+- **Server**: Physical servers with hardware details
+- **PC**: Personal computers and workstations  
+- **VirtualMachine**: Virtual machine management
+- **NetworkDevice**: Network equipment (switches, routers, firewalls)
+
+#### 👥 People & Organization
+- **Person**: Individual contacts and users
+- **Team**: Team management and assignments
+- **Organization**: Organizational structure
+
+### Key Features
+
+#### 🎯 Automatic Class Detection
+The system intelligently detects which iTop class you're querying:
+```
+"Show me all critical servers" → Detects: Server class
+"List user requests from last week" → Detects: UserRequest class
+"Find network switches in production" → Detects: NetworkDevice class
+```
+
+#### 🔍 Advanced Query Capabilities
+- **Grouping & Breakdown**: "Show servers grouped by organization"
+- **SLA Analysis**: "Find tickets with SLA breaches"
+- **Status Filtering**: "List production servers"
+- **Multi-criteria**: "Critical VMs owned by Database team"
+- **Fuzzy Matching**: Handles typos and variations in names
+
+#### 📊 Enhanced Output Formatting
+Each class handler provides:
+- **Class-specific icons** (🖥️ for servers, 🎫 for tickets, etc.)
+- **Relevant field selection** based on query context
+- **Statistical summaries** for grouping queries
+- **Detailed vs summary modes** based on query type
+- **Rich metadata** including applied filters and query details
+
+#### 🔧 Smart Field Mapping
+User-friendly terms are automatically mapped to iTop schema fields:
+```
+"organization" → "org_name"
+"owner" → "owner_friendlyname"  
+"critical" → "business_criticity = critical"
+"production" → "status = production"
+```
+
+### Example Queries
+
+#### Infrastructure Queries
+```
+"Show all production servers"
+"List critical VMs by organization" 
+"Find network switches in Datacenter A"
+"Count PCs by location"
+"Show servers with Windows OS"
+```
+
+#### Ticket Management
+```
+"Show high priority user requests"
+"List incidents created this week"
+"Find changes scheduled for next month"
+"Group tickets by status"
+"Show SLA breached requests"
+```
+
+#### People & Organization
+```
+"List active people in IT department"
+"Show teams by organization"
+"Find managers in Engineering"
+"Count users by location"
+```
+
+### Advanced Features
+
+#### 🎯 Software Focus Mode
+For infrastructure queries, automatic detection of software-related intent:
+```
+"Show software on Server2" → Returns installed applications
+"List applications on production servers" → Software-focused output
+```
+
+#### 📈 Statistical Analysis
+Automatic grouping and statistical breakdowns:
+```
+"Servers by organization" → Groups servers and shows counts per org
+"Ticket status breakdown" → Shows distribution across statuses
+"SLA compliance by team" → Analyzes SLA performance by team
+```
+
+#### 🔄 Fallback Support
+- Generic handler for classes without specific implementations
+- Intelligent field detection for unknown classes
+- Graceful degradation with helpful error messages
 
 ## 🧪 Development & Testing
 

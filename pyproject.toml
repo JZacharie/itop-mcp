@@ -1,7 +1,7 @@
 [project]
 name = "itop-mcp"
-version = "1.1.0"
-description = "Model Context Protocol server for iTop ITSM integration with advanced analytics"
+version = "1.2.0"
+description = "Model Context Protocol server for iTop ITSM integration with Smart Query Processor V2 and class-specific handlers"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
