@@ -9,10 +9,10 @@ from typing import Any, Optional, Dict, List
 from datetime import datetime, timedelta
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 # Initialize FastMCP server
-mcp = FastMCP("itop-mcp", description="iTop ITSM integration server")
+mcp = FastMCP("itop-mcp")
 
 # Configuration
 ITOP_BASE_URL = os.getenv("ITOP_BASE_URL", "")
@@ -4819,7 +4819,7 @@ def main():
         print("  - ITOP_VERSION: API version (optional, default: 1.4)")
         exit(1)
         
-    mcp.run()
+    mcp.run(host="0.0.0.0",transport="http")
 
 if __name__ == "__main__":
     main()
